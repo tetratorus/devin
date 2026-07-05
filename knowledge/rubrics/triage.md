@@ -29,8 +29,13 @@ These need human judgment even when the fix looks mechanical.
 The issue lacks what any engineer would need to start: no reproduction
 steps, intermittent with no pattern, "no errors in logs", missing
 version/config info, or it is really a support question / probable
-misconfiguration. Signals: `validation:required`-style labels, questions
-rather than defect reports.
+misconfiguration. Judge this from the issue CONTENT only.
+
+Do NOT treat triage-workflow labels such as `validation:required` as a
+hold signal — repos apply those automatically to every new bug report,
+so they say nothing about actionability. An issue with clear
+reproduction steps and an identified root cause is actionable
+regardless of such labels.
 
 ## 4. The agent must be able to verify its own fix -> hold if it can't
 

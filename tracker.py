@@ -20,6 +20,7 @@ import sys
 import time
 import urllib.request
 from datetime import datetime, timezone
+from pathlib import Path
 
 import sync_playbook
 
@@ -683,6 +684,72 @@ def spawn_devin_session(issue: dict, source_body: str) -> str | None:
     return session.get("url")
 
 
+TRIAGE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "decision": {"type": "string", "enum": ["auto", "review", "hold"]},
+        "rule_fired": {"type": "string"},
+        "reason": {"type": "string"},
+        "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
+    },
+    "required": ["decision", "rule_fired", "reason", "confidence"],
+}
+
+TRIAGE_RUBRIC = Path(__file__).parent / "knowledge" / "rubrics" / "triage.md"
+TRIAGE_POLL_SECONDS = 15
+TRIAGE_TIMEOUT_SECONDS = 300
+
+
+def triage_issue(number: int, title: str, body: str) -> dict | None:
+    """Classify an issue against the triage rubric via a classify-only Devin
+    session. Returns {decision, rule_fired, reason, confidence} or None on
+    failure/timeout. The session is terminated once the verdict is read."""
+    if not TRIAGE_RUBRIC.exists():
+        print(f"Triage rubric missing at {TRIAGE_RUBRIC}; skipping triage.", file=sys.stderr)
+        return {"decision": "auto", "rule_fired": "none", "reason": "rubric missing", "confidence": "low"}
+
+    prompt = (
+        "You are the TRIAGE component of an issue-to-agent pipeline.\n"
+        "Your ONLY job is to classify ONE issue. Do NOT clone any repository, do NOT\n"
+        "write code, do NOT open PRs, do NOT comment on GitHub. Read, classify,\n"
+        "return structured output, done.\n\n"
+        f"Rubric:\n\n{TRIAGE_RUBRIC.read_text()}\n\n"
+        f"Issue #{number}: {title}\n\n{body}\n\n"
+        "Return your classification via structured output."
+    )
+    session = devin_request(
+        "POST",
+        f"/organizations/{DEVIN_ORG_ID}/sessions",
+        data={
+            "prompt": prompt,
+            "title": f"TRIAGE issue #{number}: {title[:80]}",
+            "tags": [f"triage:{number}", "triage"],
+            "unlisted": True,
+            "structured_output_required": True,
+            "structured_output_schema": TRIAGE_SCHEMA,
+        },
+    )
+    if session is None:
+        return None
+    session_id = session.get("session_id")
+
+    verdict = None
+    deadline = time.time() + TRIAGE_TIMEOUT_SECONDS
+    while time.time() < deadline:
+        time.sleep(TRIAGE_POLL_SECONDS)
+        state = devin_request("GET", f"/organizations/{DEVIN_ORG_ID}/sessions/{session_id}")
+        if state is None:
+            continue
+        out = state.get("structured_output")
+        if out and out.get("decision"):
+            verdict = out
+            break
+        if state.get("status") in ("exit", "error"):
+            break
+    terminate_session(session_id)
+    return verdict
+
+
 def poll_once() -> None:
     """Run one poll pass. Hand off any open issue not yet tracked on GitHub."""
     handle_closed_issues()
@@ -739,10 +806,32 @@ def poll_once() -> None:
             print(f"  -> Issue #{number} already has a session after lock; will skip.")
             continue
 
+        print(f"  -> Triaging issue #{number} against the rubric...")
+        verdict = triage_issue(number, title, body)
+        if verdict is None:
+            print(f"  -> Triage failed for issue #{number}; removing lock and retrying next poll.", file=sys.stderr)
+            remove_label(number, "devin")
+            continue
+
+        decision = verdict.get("decision")
+        summary = f"**Triage: {decision}** ({verdict.get('rule_fired')}, confidence {verdict.get('confidence')}) — {verdict.get('reason')}"
+        print(f"  -> Triage verdict for #{number}: {decision} ({verdict.get('confidence')})")
+
+        if decision == "hold" or verdict.get("confidence") == "low":
+            remove_label(number, "devin")
+            add_label(number, "devin-hold")
+            held = "held for a human — no Devin session was spawned" if decision == "hold" \
+                else "low-confidence classification, treated as hold — no Devin session was spawned"
+            comment = post_comment(number, f"{summary}\n\nThis issue was {held}. "
+                                   "A trusted user can remove the `devin-hold` label to re-triage.")
+            if comment:
+                mark_relayed_comment(comment.get("id"))
+            continue
+
         session_url = spawn_devin_session(issue, body)
         if session_url:
             print(f"  -> Devin session: {session_url}")
-            comment = post_comment(number, f"Devin session started: {session_url}")
+            comment = post_comment(number, f"{summary}\n\nDevin session started: {session_url}")
             if comment:
                 mark_relayed_comment(comment.get("id"))
             else:

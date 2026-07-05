@@ -25,12 +25,21 @@ from an issue description. Nothing in the pipeline caps task size, but the
 system is not tuned or trusted for this; expect these to land in human
 review, not auto-flow.
 
+The tier boundary is enforced at intake by the **triage step**: every
+trusted new issue is classified against `knowledge/rubrics/triage.md` before
+any fix session spawns — `auto` (Tier 1) flows through, `review` (Tier 2)
+flows through with human review forced on the PR, `hold` (Tier 3, security
+areas, not-actionable, unverifiable-in-sandbox, or any low-confidence
+verdict) gets `devin-hold` + a reason comment and never costs a fix session.
+
 ## Components
 
 **tracker.py** — the pipeline loop. Polls GitHub every 5 minutes
 (`GH_TRACK_POLL_INTERVAL`, default 300s) and on each cycle does four jobs:
 
-1. *Intake*: spawn a Devin session for each new, trusted, untracked issue.
+1. *Intake*: triage each new, trusted, untracked issue against the rubric
+   (a short classify-only Devin session, terminated after the verdict), then
+   spawn a fix session — or hold, spawning nothing.
 2. *Relay*: forward new trusted issue comments into the live session.
 3. *Watch*: react to session state (waiting for input, suspended, done, PR
    opened) by advancing labels and posting issue comments.
@@ -46,7 +55,10 @@ issue comments rather than waiting silently; branch naming
 the issue asks, stop and ask on the issue if it balloons); and the PR
 write-up template. **sync_playbook.py** pushes playbook and knowledge notes
 to the Devin org via the v3 API (create-or-update by name, idempotent) so the
-org copy always matches the repo.
+org copy always matches the repo. `knowledge/rubrics/` is deliberately
+outside the sync: rubrics steer pipeline decisions (the triage step embeds
+`rubrics/triage.md` in its classify prompt directly), not fix-session
+behavior.
 
 **sessions.py / status.py** — read-only views. `sessions.py` is
 Devin-centric: session id, status, ACUs, PR count per session. `status.py` is
@@ -73,11 +85,17 @@ nothing; sessions inherit the org's GitHub integration.
  │  │                                                            │   │
  │  │ INTAKE   new open issue, no `devin` label                  │   │
  │  │          ├─ author untrusted ──► label `devin-hold`, stop  │   │
- │  │          ├─ add `devin` label (lock)                       │   │
+ │  │          ├─ add `devin-triage` label (lock)                │   │
  │  │          ├─ re-check session tag issue:<n> (race backstop) │   │
- │  │          ├─ create session: prompt = issue, playbook_id,   │   │
+ │  │          ├─ TRIAGE: classify-only session applies          │   │
+ │  │          │    knowledge/rubrics/triage.md, terminated      │   │
+ │  │          │    after verdict {decision, rule, confidence}   │   │
+ │  │          ├─ hold / low confidence ──► label `devin-hold`,  │   │
+ │  │          │    comment reason, NO fix session, stop         │   │
+ │  │          ├─ auto | review ──► label `devin`, create fix    │   │
+ │  │          │    session: prompt = issue, playbook_id,        │   │
  │  │          │    tag issue:<n>, structured_output_schema      │   │
- │  │          └─ comment "Devin session started: <url>"         │   │
+ │  │          └─ comment "Triage: <verdict> — session <url>"    │   │
  │  │                                                            │   │
  │  │ RELAY    new comment on tracked issue                      │   │
  │  │          ├─ untrusted or bot ──► ignore                    │   │
@@ -116,11 +134,14 @@ Issue lifecycle — exactly one `devin-*` label at any time:
 ```
                  ┌─► devin-hold (untrusted author; trusted human can release)
    issue opened ─┤
-                 └─► devin ─► devin-pr ─► devin-needs-review ─┐
-                     │              └───► devin-auto-ok ──────┼─► merged,
-                     │                                        │   issue closed
-                     ├─► devin-error (session died)           │
-                     └─► devin-abandoned (issue closed early) ┘
+                 └─► devin-triage (rubric classification in flight)
+                     ├─► devin-hold (triage: hold / low confidence —
+                     │              no fix session ever spawned)
+                     └─► devin ─► devin-pr ─► devin-needs-review ─┐
+                         │              └───► devin-auto-ok ──────┼─► merged,
+                         │                                        │   issue closed
+                         ├─► devin-error (session died)           │
+                         └─► devin-abandoned (issue closed early) ┘
 ```
 
 The PR write-up (every Devin PR body):
@@ -147,6 +168,14 @@ answer "which comments were relayed". The tracker starts cold, crashes,
 restarts, or runs as accidental duplicates and stays correct — and every bit
 of state is visible and overridable in the GitHub UI (pull a label off to
 re-route an issue).
+
+**Triage before spend.** The rubric is applied *before* the expensive fix
+session exists — a hold costs one short classify-only session (terminated
+the moment its verdict is read) instead of a full VM cloning superset. The
+rubric is code in this repo (`knowledge/rubrics/triage.md`): changing the
+filter's judgment is a reviewable commit, and every verdict is auditable as
+a comment on the issue. The playbook's scope-discipline rule remains as the
+in-flight backstop for issues that balloon after passing triage.
 
 **Trust is enforced programmatically, not by prompt.** Only authors with
 `author_association` OWNER / MEMBER / COLLABORATOR can trigger a session or

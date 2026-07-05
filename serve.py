@@ -25,7 +25,7 @@ ACU_USD = float(os.environ.get("ACU_USD", "0"))  # 0 = unset; UI shows ACUs only
 
 LIFECYCLE_PRIORITY = [
     "devin-error", "devin-abandoned", "devin-needs-review",
-    "devin-auto-ok", "devin-pr", "devin-hold", "devin",
+    "devin-auto-ok", "devin-pr", "devin-hold", "devin", "devin-triage",
 ]
 LIVE_SESSION = lambda s: s.get("status") in ("running", "suspended")
 SESSION_URL_RE = re.compile(r"https://app\.devin\.ai/sessions/([0-9a-f]+)")
@@ -103,6 +103,13 @@ def build_state() -> dict:
                 comment_links[m.group(1)] = e["issue_number"]
     for sid, n in comment_links.items():
         session_issue.setdefault(sid, n)
+    # last resort: the tracker titles sessions "<owner>/<repo> issue #<n>: ..."
+    title_re = re.compile(r"\bissue #(\d+):")
+    for sid, s in sessions.items():
+        if sid not in session_issue:
+            m = title_re.search(s.get("title") or "")
+            if m:
+                session_issue[sid] = int(m.group(1))
 
     issue_sessions = {}  # number -> [session dicts], newest first
     for sid, n in session_issue.items():

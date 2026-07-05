@@ -160,6 +160,7 @@ details .inner { padding-top: 10px; }
   <input id="fq" type="search" placeholder="Filter by title or #number…">
   <select id="flc">
     <option value="">all lifecycle states</option>
+    <option value="devin-triage">triaging</option>
     <option value="devin">working</option>
     <option value="devin-pr">PR open</option>
     <option value="devin-auto-ok">auto-ok</option>
@@ -276,6 +277,7 @@ const age = iso => {
 const chip = (text, kind, icon) =>
   `<span class="chip ${kind}">${icon ? icon + " " : ""}${esc(text)}</span>`;
 const LIFECYCLE_CHIP = {
+  "devin-triage":       ["triaging", "neutral", "◌"],
   "devin":              ["working", "brand", ""],
   "devin-pr":           ["PR open", "brand", ""],
   "devin-auto-ok":      ["auto-ok", "ok", "✓"],

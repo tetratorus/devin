@@ -232,6 +232,7 @@ LIVE_STATUSES = {"running", "suspended", "waiting_for_user", "waiting_for_approv
 TERMINAL_STATUSES = {"error", "exited", "exit", "terminated", "failed"}
 SUSPENDED_TERMINAL_DETAILS = {"out_of_credits", "usage_limit_exceeded"}
 LIFECYCLE_LABELS = {
+    "devin-triage",
     "devin",
     "devin-pr",
     "devin-needs-review",
@@ -240,6 +241,8 @@ LIFECYCLE_LABELS = {
     "devin-abandoned",
     "devin-hold",
 }
+# Flag label (not lifecycle): triage said "review" — the PR always needs a human.
+REVIEW_REQUIRED_LABEL = "devin-review-required"
 
 _TRACKER_USER = None
 
@@ -317,8 +320,12 @@ def get_pr_state(pr_url: str) -> str | None:
     return pr.get("state")
 
 
-def get_review_label(session: dict) -> str:
-    """Map the session's structured output to the review lifecycle label."""
+def get_review_label(issue: dict, session: dict) -> str:
+    """Map structured output to the review lifecycle label. A triage verdict
+    of 'review' (devin-review-required flag) always forces human review,
+    regardless of the author-agent's own needs_human_review claim."""
+    if issue_has_label(issue, REVIEW_REQUIRED_LABEL):
+        return "devin-needs-review"
     output = session.get("structured_output") or {}
     if output.get("needs_human_review"):
         return "devin-needs-review"
@@ -341,7 +348,7 @@ def advance_lifecycle_label(issue: dict, session: dict | None) -> str | None:
             if any(s == "open" for s in states):
                 return "devin-pr"
             if any(s == "merged" for s in states):
-                return get_review_label(session)
+                return get_review_label(issue, session)
             if any(s == "closed" for s in states):
                 return "devin-error"
         return None
@@ -356,7 +363,7 @@ def advance_lifecycle_label(issue: dict, session: dict | None) -> str | None:
         if any(s == "open" for s in states):
             return None
         if any(s == "merged" for s in states):
-            return get_review_label(session)
+            return get_review_label(issue, session)
         return "devin-error"
 
     return None
@@ -784,6 +791,14 @@ def poll_once() -> None:
             print(f"Skipping issue #{number}: on hold (devin-hold).")
             continue
 
+        if issue_has_label(issue, "devin-triage"):
+            # A healthy tracker never sees this at loop start (triage is
+            # synchronous) — it means a tracker crashed mid-triage. Clear the
+            # stale lock; the issue re-enters intake next cycle.
+            print(f"  -> Stale devin-triage lock on issue #{number}; clearing for re-triage.")
+            remove_label(number, "devin-triage")
+            continue
+
         prompt_source = get_issue_prompt_source(issue)
         if prompt_source is None:
             print(f"[HOLD] Issue #{number} is untrusted and has no trusted approval or restatement.")
@@ -797,20 +812,22 @@ def poll_once() -> None:
         title, body = prompt_source
         print(f"[NEW ISSUE] #{number}: {title}\n  {issue.get('html_url', '')}")
 
-        if not add_label(number, "devin"):
-            print(f"  -> Failed to lock devin label on issue #{number}; will retry next poll.", file=sys.stderr)
+        if not add_label(number, "devin-triage"):
+            print(f"  -> Failed to lock devin-triage label on issue #{number}; will retry next poll.", file=sys.stderr)
             continue
 
         if find_session_by_issue_tag(number):
             # Another tracker raced us and created a session after we added the label.
             print(f"  -> Issue #{number} already has a session after lock; will skip.")
+            remove_label(number, "devin-triage")
+            add_label(number, "devin")
             continue
 
         print(f"  -> Triaging issue #{number} against the rubric...")
         verdict = triage_issue(number, title, body)
         if verdict is None:
             print(f"  -> Triage failed for issue #{number}; removing lock and retrying next poll.", file=sys.stderr)
-            remove_label(number, "devin")
+            remove_label(number, "devin-triage")
             continue
 
         decision = verdict.get("decision")
@@ -818,7 +835,7 @@ def poll_once() -> None:
         print(f"  -> Triage verdict for #{number}: {decision} ({verdict.get('confidence')})")
 
         if decision == "hold" or verdict.get("confidence") == "low":
-            remove_label(number, "devin")
+            remove_label(number, "devin-triage")
             add_label(number, "devin-hold")
             held = "held for a human — no Devin session was spawned" if decision == "hold" \
                 else "low-confidence classification, treated as hold — no Devin session was spawned"
@@ -831,6 +848,10 @@ def poll_once() -> None:
         session_url = spawn_devin_session(issue, body)
         if session_url:
             print(f"  -> Devin session: {session_url}")
+            remove_label(number, "devin-triage")
+            add_label(number, "devin")
+            if decision == "review":
+                add_label(number, REVIEW_REQUIRED_LABEL)
             comment = post_comment(number, f"{summary}\n\nDevin session started: {session_url}")
             if comment:
                 mark_relayed_comment(comment.get("id"))
@@ -838,7 +859,7 @@ def poll_once() -> None:
                 print(f"  -> Failed to comment on issue #{number}.", file=sys.stderr)
         else:
             print(f"  -> Failed to spawn Devin session for #{number}; removing lock and retrying next poll.", file=sys.stderr)
-            remove_label(number, "devin")
+            remove_label(number, "devin-triage")
 
 
 def main() -> None:
@@ -852,6 +873,10 @@ def main() -> None:
 
     if not ensure_label("devin-hold"):
         print("Failed to ensure the 'devin-hold' label exists in the repo.", file=sys.stderr)
+        sys.exit(1)
+
+    if not ensure_label(REVIEW_REQUIRED_LABEL):
+        print(f"Failed to ensure the '{REVIEW_REQUIRED_LABEL}' label exists in the repo.", file=sys.stderr)
         sys.exit(1)
 
     for label in LIFECYCLE_LABELS:

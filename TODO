@@ -211,13 +211,35 @@ reads them. A red PR is currently silent and still mergeable.
 > `devin-ci-failed`. The deliberately-failing-PR scenario and the master
 > baseline are still pending.
 
+## 10. Triage step: rubric before spend
+
+Every trusted new issue is classified against knowledge/rubrics/triage.md
+BEFORE a fix session spawns. Decisions: auto (spawn), review (spawn, force
+human review on the PR), hold (devin-hold + reason comment, NO fix session).
+Low confidence is treated as hold. The classifier is a short classify-only
+Devin session (unlisted, tagged triage:<n>, terminated once the structured
+verdict {decision, rule_fired, reason, confidence} is read).
+
+- [x] triage_issue() in tracker.py between the label lock and spawn.
+- [x] Verdict recorded as an issue comment (auditable), hold path labels
+      devin-hold and spawns nothing, triage failure releases the lock and
+      retries next poll.
+- [ ] Lock label during classification is `devin-triage` (visible in the
+      dashboard as its own state); swaps to `devin` or `devin-hold` on the
+      verdict. Stale `devin-triage` with no session = crashed mid-triage;
+      tracker clears it and re-triages next cycle.
+- [ ] `review` verdict forces `devin-needs-review` on the eventual PR
+      regardless of the author-agent's own needs_human_review flag.
+- [ ] Verify: import a SIP/proposal issue -> held with reason, no fix
+      session, no ACUs; import a routine bug -> triaged auto, spawns.
+
 ## Later (do not start)
 
 - Reviewer bot: consumes the section-6 write-ups and checks them against
   company/engineering principles that aren't visible in the diff; posts a
   second-opinion review on the PR.
-- Triage classification beyond trust (AUTO vs HOLD for routine vs large/
-  sensitive changes) — mechanism undecided (LLM vs labels vs hybrid).
+- Triage classifier as a plain LLM API call instead of a classify-only Devin
+  session, if per-issue triage latency/cost ever matters.
 - Queueing / concurrency limits; per-session max_acu_limit and org budget
   alerts; tracker liveness heartbeat; colliding-PR detection; handling
   issue edits and reopens.

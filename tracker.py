@@ -88,12 +88,12 @@ def remove_label(number: int, label: str) -> bool:
     ) is not None
 
 
-def post_comment(number: int, body: str) -> bool:
+def post_comment(number: int, body: str) -> dict | None:
     return gh_api(
         f"/repos/{OWNER}/{REPO}/issues/{number}/comments",
         method="POST",
         fields={"body": body},
-    ) is not None
+    )
 
 
 def issue_has_label(issue: dict, label: str) -> bool:
@@ -189,6 +189,122 @@ def find_session_by_issue_tag(number: int) -> bool:
     return any(tag in session.get("tags", []) for session in data.get("items", []))
 
 
+LIVE_STATUSES = {"running", "suspended", "waiting_for_user", "waiting_for_approval"}
+
+_TRACKER_USER = None
+
+
+def get_tracker_user() -> str:
+    """Return the login of the authenticated GitHub user (cached)."""
+    global _TRACKER_USER
+    if _TRACKER_USER is None:
+        user = gh_api("/user")
+        _TRACKER_USER = user.get("login", "") if user else ""
+    return _TRACKER_USER
+
+
+def is_bot_comment(comment: dict) -> bool:
+    """Return True for comments from Devin or other bot users."""
+    login = (comment.get("user") or {}).get("login", "")
+    user_type = (comment.get("user") or {}).get("type", "")
+    return user_type == "Bot" or login.endswith("[bot]")
+
+
+def mark_relayed_comment(comment_id: int) -> bool:
+    """Mark a comment as already relayed by adding an eyes reaction."""
+    return gh_api(
+        f"/repos/{OWNER}/{REPO}/issues/comments/{comment_id}/reactions",
+        method="POST",
+        fields={"content": "eyes"},
+    ) is not None
+
+
+def is_relayed_comment(comment_id: int, tracker_user: str) -> bool:
+    """Return True if the tracker already has an eyes reaction on this comment."""
+    reactions = gh_api(f"/repos/{OWNER}/{REPO}/issues/comments/{comment_id}/reactions")
+    if reactions is None:
+        return False
+    return any(
+        r.get("content") == "eyes" and (r.get("user") or {}).get("login") == tracker_user
+        for r in reactions
+    )
+
+
+def get_sessions_for_issue(number: int) -> list[dict]:
+    """Return all Devin sessions tagged for this issue, newest first."""
+    tag = f"issue:{number}"
+    data = devin_request("GET", f"/organizations/{DEVIN_ORG_ID}/sessions?limit=100")
+    if data is None:
+        return []
+    sessions = [s for s in data.get("items", []) if tag in s.get("tags", [])]
+    sessions.sort(key=lambda s: s.get("created_at", 0), reverse=True)
+    return sessions
+
+
+def get_live_session_for_issue(number: int) -> dict | None:
+    """Return the newest live session for this issue, or None if all are terminal."""
+    for session in get_sessions_for_issue(number):
+        if session.get("status", "").lower() in LIVE_STATUSES:
+            return session
+    return None
+
+
+def send_session_message(session_id: str, message: str) -> bool:
+    """Send a message to a live Devin session."""
+    return devin_request(
+        "POST",
+        f"/organizations/{DEVIN_ORG_ID}/sessions/{session_id}/messages",
+        data={"message": message},
+    ) is not None
+
+
+def relay_comments(issue: dict, tracker_user: str) -> None:
+    """Relay new trusted comments on a tracked issue to its live Devin session."""
+    number = issue["number"]
+    session = get_live_session_for_issue(number)
+    if session is None:
+        sessions = get_sessions_for_issue(number)
+        status = sessions[0].get("status", "none") if sessions else "none"
+        print(f"[COMMENTS] Issue #{number}: no live session (status: {status}).")
+        return
+
+    session_id = session.get("session_id")
+    if not session_id:
+        return
+
+    comments = fetch_comments(number)
+    if not comments:
+        print(f"[COMMENTS] Issue #{number}: no comments.")
+        return
+
+    relayed = 0
+    for comment in comments:
+        if is_bot_comment(comment):
+            continue
+        if not is_trusted(comment.get("author_association", "").upper()):
+            continue
+        comment_id = comment.get("id")
+        if comment_id is None:
+            continue
+        if is_relayed_comment(comment_id, tracker_user):
+            continue
+
+        login = (comment.get("user") or {}).get("login", "unknown")
+        body = comment.get("body") or ""
+        message = f"New comment from {login} on issue #{number}:\n\n{body}"
+        if send_session_message(session_id, message):
+            mark_relayed_comment(comment_id)
+            relayed += 1
+            print(f"  -> Relayed comment #{comment_id} from {login} to session {session_id[:10]}.")
+        else:
+            print(f"  -> Failed to relay comment #{comment_id} from {login}.", file=sys.stderr)
+
+    if relayed == 0:
+        print(f"[COMMENTS] Issue #{number}: no new trusted comments to relay.")
+    else:
+        print(f"[COMMENTS] Issue #{number}: relayed {relayed} comment(s).")
+
+
 def fetch_issues() -> list[dict] | None:
     """Fetch open issues, newest first. Excludes pull requests."""
     endpoint = f"/repos/{OWNER}/{REPO}/issues?state=open&sort=created&direction=desc&per_page={PER_PAGE}"
@@ -234,11 +350,13 @@ def poll_once() -> None:
     if issues is None:
         return  # transient failure; retry next cycle
 
+    tracker_user = get_tracker_user()
+
     for issue in sorted(issues, key=lambda i: i["number"]):
         number = issue["number"]
 
         if issue_has_label(issue, "devin"):
-            print(f"Skipping issue #{number}: already has devin label.")
+            relay_comments(issue, tracker_user)
             continue
 
         if issue_has_label(issue, "devin-hold"):
@@ -270,7 +388,10 @@ def poll_once() -> None:
         session_url = spawn_devin_session(issue, body)
         if session_url:
             print(f"  -> Devin session: {session_url}")
-            if not post_comment(number, f"Devin session started: {session_url}"):
+            comment = post_comment(number, f"Devin session started: {session_url}")
+            if comment:
+                mark_relayed_comment(comment.get("id"))
+            else:
                 print(f"  -> Failed to comment on issue #{number}.", file=sys.stderr)
         else:
             print(f"  -> Failed to spawn Devin session for #{number}; removing lock and retrying next poll.", file=sys.stderr)

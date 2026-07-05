@@ -19,6 +19,7 @@ import subprocess
 import sys
 import time
 import urllib.request
+from datetime import datetime, timezone
 
 import sync_playbook
 
@@ -130,6 +131,17 @@ def is_trusted(author_association: str) -> bool:
     return author_association.upper() in TRUSTED_ASSOCIATIONS
 
 
+def github_timestamp(ts: str) -> int:
+    """Parse a GitHub ISO 8601 timestamp into Unix seconds."""
+    if not ts:
+        return 0
+    try:
+        dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        return int(dt.timestamp())
+    except (ValueError, AttributeError):
+        return 0
+
+
 def is_approval_comment(body: str) -> bool:
     """A trusted comment that explicitly approves using the original issue text."""
     text = body.lower()
@@ -216,6 +228,17 @@ def find_session_by_issue_tag(number: int) -> bool:
 
 
 LIVE_STATUSES = {"running", "suspended", "waiting_for_user", "waiting_for_approval"}
+TERMINAL_STATUSES = {"error", "exited", "terminated", "failed"}
+SUSPENDED_TERMINAL_DETAILS = {"out_of_credits", "usage_limit_exceeded"}
+LIFECYCLE_LABELS = {
+    "devin",
+    "devin-pr",
+    "devin-needs-review",
+    "devin-auto-ok",
+    "devin-error",
+    "devin-abandoned",
+    "devin-hold",
+}
 
 _TRACKER_USER = None
 
@@ -254,6 +277,100 @@ def is_relayed_comment(comment_id: int, tracker_user: str) -> bool:
         r.get("content") == "eyes" and (r.get("user") or {}).get("login") == tracker_user
         for r in reactions
     )
+
+
+def is_terminal_session(session: dict) -> bool:
+    """Return True if the session is in a terminal state."""
+    status = session.get("status", "").lower()
+    detail = session.get("status_detail", "").lower()
+    if status in TERMINAL_STATUSES:
+        return True
+    if status == "suspended" and detail in SUSPENDED_TERMINAL_DETAILS:
+        return True
+    return False
+
+
+def get_session_for_lifecycle(number: int) -> dict | None:
+    """Return the best session to inspect for lifecycle decisions.
+
+    Prefers the newest live session; falls back to the newest session overall.
+    """
+    live = get_live_session_for_issue(number)
+    if live:
+        return live
+    sessions = get_sessions_for_issue(number)
+    return sessions[0] if sessions else None
+
+
+def get_pr_state(pr_url: str) -> str | None:
+    """Return the GitHub state of a PR: 'open', 'closed', or 'merged'."""
+    try:
+        pr_number = int(pr_url.split("/")[-1])
+    except (ValueError, IndexError):
+        return None
+    pr = gh_api(f"/repos/{OWNER}/{REPO}/pulls/{pr_number}")
+    if pr is None:
+        return None
+    if pr.get("merged"):
+        return "merged"
+    return pr.get("state")
+
+
+def get_review_label(session: dict) -> str:
+    """Map the session's structured output to the review lifecycle label."""
+    output = session.get("structured_output") or {}
+    if output.get("needs_human_review"):
+        return "devin-needs-review"
+    return "devin-auto-ok"
+
+
+def advance_lifecycle_label(issue: dict, session: dict | None) -> str | None:
+    """Decide the next lifecycle label for a tracked issue, or None if no change."""
+    labels = {l.get("name") for l in issue.get("labels", [])}
+    current = labels & LIFECYCLE_LABELS
+
+    if "devin" in current:
+        if session is None:
+            return None
+        if is_terminal_session(session):
+            return "devin-error"
+        prs = session.get("pull_requests", [])
+        if prs:
+            states = [get_pr_state(pr.get("pr_url", "")) for pr in prs]
+            if any(s == "open" for s in states):
+                return "devin-pr"
+            if any(s == "merged" for s in states):
+                return get_review_label(session)
+            if any(s == "closed" for s in states):
+                return "devin-error"
+        return None
+
+    if "devin-pr" in current:
+        if session is None:
+            return "devin-error"
+        prs = session.get("pull_requests", [])
+        if not prs:
+            return "devin-error"
+        states = [get_pr_state(pr.get("pr_url", "")) for pr in prs]
+        if any(s == "open" for s in states):
+            return None
+        if any(s == "merged" for s in states):
+            return get_review_label(session)
+        return "devin-error"
+
+    return None
+
+
+def set_lifecycle_label(issue: dict, new_label: str) -> None:
+    """Replace the issue's lifecycle labels with new_label."""
+    number = issue["number"]
+    current_labels = {l.get("name") for l in issue.get("labels", [])}
+    for label in current_labels & LIFECYCLE_LABELS:
+        if label != new_label:
+            remove_label(number, label)
+    if new_label not in current_labels:
+        add_label(number, new_label)
+        print(f"  -> Lifecycle label on issue #{number}: {new_label}")
 
 
 def get_sessions_for_issue(number: int) -> list[dict]:
@@ -345,8 +462,8 @@ def check_blocked_states(issue: dict, session: dict, tracker_user: str) -> None:
 
         comments = fetch_comments(number)
         bot_comments = [c for c in comments if is_bot_comment(c)]
-        latest_bot = max(bot_comments, key=lambda c: c.get("created_at", 0)) if bot_comments else None
-        if latest_bot and latest_bot.get("created_at", 0) > updated_at:
+        latest_bot = max(bot_comments, key=lambda c: github_timestamp(c.get("created_at", ""))) if bot_comments else None
+        if latest_bot and github_timestamp(latest_bot.get("created_at", "")) > updated_at:
             return
 
         if send_session_message(session_id, "Please post your question or status update to the GitHub issue thread."):
@@ -424,15 +541,18 @@ def poll_once() -> None:
     for issue in sorted(issues, key=lambda i: i["number"]):
         number = issue["number"]
 
-        if issue_has_label(issue, "devin"):
-            session = get_live_session_for_issue(number)
-            if session is None:
-                sessions = get_sessions_for_issue(number)
-                status = sessions[0].get("status", "none") if sessions else "none"
-                print(f"[TRACKED] Issue #{number}: no live session (status: {status}).")
-            else:
+        if issue_has_label(issue, "devin") or issue_has_label(issue, "devin-pr"):
+            session = get_session_for_lifecycle(number)
+            if session and session.get("status", "").lower() in LIVE_STATUSES:
                 relay_comments(issue, session, tracker_user)
                 check_blocked_states(issue, session, tracker_user)
+            else:
+                status = session.get("status", "none") if session else "none"
+                print(f"[TRACKED] Issue #{number}: no live session (status: {status}).")
+
+            new_label = advance_lifecycle_label(issue, session)
+            if new_label:
+                set_lifecycle_label(issue, new_label)
             continue
 
         if issue_has_label(issue, "devin-hold"):
@@ -486,6 +606,11 @@ def main() -> None:
     if not ensure_label("devin-hold"):
         print("Failed to ensure the 'devin-hold' label exists in the repo.", file=sys.stderr)
         sys.exit(1)
+
+    for label in LIFECYCLE_LABELS:
+        if not ensure_label(label):
+            print(f"Failed to ensure the '{label}' label exists in the repo.", file=sys.stderr)
+            sys.exit(1)
 
     load_playbook()
 

@@ -1,5 +1,7 @@
 # devin — GitHub issue → Devin pipeline
 
+[Loom](https://www.loom.com/share/74d594053a604bb89587861c6113ddb8)
+
 Watches a GitHub repo for new issues and hands each one to a
 [Devin](https://devin.ai) session that fixes it and opens a PR. All pipeline
 state lives on GitHub itself (labels, comments, reactions) — the tracker is

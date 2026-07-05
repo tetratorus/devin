@@ -1,0 +1,163 @@
+# TODO — issue-to-Devin pipeline
+
+How to work this file (for the executing agent):
+- Work items top to bottom; they are ordered by dependency.
+- Tick a box only when the task is implemented AND verified end-to-end
+  against tetratorus/superset (the live test repo).
+- One PR per numbered section. Reference this file in the PR.
+- Current code: tracker.py (poll loop, spawns sessions), sessions.py
+  (session table), Dockerfile. Devin API is v3
+  (https://api.devin.ai/v3/organizations/$DEVIN_ORG_ID/...), auth via
+  DEVIN_SERVICE_USER_KEY env var. GitHub via `gh` CLI.
+
+Decisions already made — do not relitigate:
+- All pipeline state lives on GitHub (labels + comments on the issue).
+  No local state files, no databases. Any tracker instance must be able to
+  start cold and behave correctly.
+- Only input from trusted parties ever reaches Devin. The gate is
+  programmatic, in the tracker — not a prompt instruction. Applies to both
+  session kickoff and relayed comments.
+- Devin behavior norms (comment questions on the issue, PR write-up format)
+  live in org-level knowledge/playbook, version-controlled in this repo and
+  synced to the Devin org via API from the Docker setup.
+- Every Devin PR must carry the structured write-up (section 6) as its body.
+
+## 1. Per-issue state on GitHub (replaces watermark)
+
+- [ ] When spawning a session: add label `devin` to the issue and post a
+      comment "Devin session started: <session URL>".
+- [ ] Before spawning: skip any issue that already has the `devin` label.
+- [ ] Delete the watermark state file logic entirely. Tracker must be
+      stateless across restarts and safe to run in parallel by accident.
+- [ ] Second line of defense: create sessions with tag `issue:<n>`; before
+      spawning, query sessions by that tag and skip if one exists.
+- [ ] Verify: restart tracker mid-run, run two trackers at once — no
+      duplicate sessions for the same issue.
+
+## 2. Trust gate (programmatic)
+
+- [ ] Trusted = issue/comment author_association in OWNER, MEMBER,
+      COLLABORATOR (available on issue and comment objects; no extra call).
+- [ ] Untrusted new issue: do NOT spawn. Label `devin-hold` and move on.
+      Its title/body must never appear in any Devin prompt.
+- [ ] Untrusted comment on a tracked issue: never relayed to the session.
+- [ ] A trusted user can override by removing `devin-hold` — tracker then
+      treats the issue as new (but still uses the ORIGINAL untrusted text
+      only if a trusted user has explicitly commented approval; otherwise
+      the trusted user's restatement comment is the prompt source).
+- [ ] Verify: file an issue from a non-collaborator account -> held, no
+      session, no prompt leakage.
+
+## 3. Comment relay: issue -> running session
+
+- [ ] Each poll cycle, for every open issue with label `devin` and a live
+      session (status running/suspended-resumable): fetch issue comments.
+- [ ] Relay each new trusted comment to the session via
+      POST /v3/organizations/$ORG/sessions/<id>/messages, prefixed with
+      "New comment from <login> on issue #<n>:".
+- [ ] Idempotence without local state: after relaying a comment, add an
+      "eyes" reaction to it as the marker; skip comments that already have
+      the tracker's reaction. (Devin's own comments and bot comments are
+      never relayed.)
+- [ ] If the session has ended (exit/error), do not relay; post nothing.
+      Label `devin-done` or `devin-error` per section 5 lifecycle.
+- [ ] Verify: comment on a live issue -> message shows up in session,
+      second poll does not re-send it.
+
+## 4. Devin -> issue: responses and blocked states
+
+- [ ] Playbook (section 5) instructs Devin: when you have a question or a
+      status update, post it as a comment on the GitHub issue (you have gh
+      access); do not sit silently in waiting_for_user.
+- [ ] Tracker watches session status each cycle. On
+      status_detail == waiting_for_user or waiting_for_approval: if Devin
+      hasn't posted an issue comment since entering that state, send the
+      session a message telling it to post its question to the issue.
+- [ ] On suspended (inactivity/limits): surface it — comment on the issue
+      "session suspended: <reason>" so it's visible without the dashboard.
+- [ ] Verify: force a question (file a deliberately ambiguous issue) ->
+      Devin's question appears as an issue comment; answer as a trusted
+      user -> answer reaches the session via section 3 relay.
+
+## 5. Playbook & knowledge as code (in the Docker setup)
+
+- [ ] Add playbook.md and knowledge/ dir to this repo. Contents:
+      - Post questions/updates as issue comments (section 4 behavior).
+      - PR write-up format (section 6).
+      - Branch naming devin/<issue>-<slug>; PR references the issue.
+      - Scope discipline: fix only what the issue asks; if the fix balloons,
+        stop and ask on the issue.
+- [ ] sync_playbook.py: create-or-update by name via v3 API
+      (POST/PUT /organizations/$ORG/playbooks, /knowledge/notes) so re-runs
+      are idempotent. Run it on container start, before the tracker loop.
+- [ ] Tracker passes the synced playbook_id when creating sessions.
+- [ ] Dockerfile updated: COPY playbook + knowledge, entrypoint runs sync
+      then tracker.
+- [ ] Verify: edit playbook.md, restart container, confirm the org playbook
+      updated and a new session received it.
+
+## 6. Structured PR write-up (replaces raw-diff review)
+
+Every Devin PR body must contain exactly these sections:
+      ## What changed        (plain-language summary, better than the diff)
+      ## Why this is safe to merge
+      ## Needs human review  (files + the INTENT behind each change that a
+                              human should judge, not just filenames)
+      ## Risks & potential problems
+      ## Tests               (what was run, what passed, coverage delta if known)
+
+- [ ] Encode this template in the playbook (section 5).
+- [ ] Also request it via structured_output_schema on session create, so the
+      tracker can read {pr_url, needs_human_review: bool, review_points[],
+      risks[]} programmatically without parsing the PR body.
+- [ ] Tracker records the needs_human_review flag as a label on the issue:
+      `devin-needs-review` vs `devin-auto-ok`.
+- [ ] Verify: next real issue produces a PR with all five sections and the
+      structured output round-trips into labels.
+
+## 7. Lifecycle labels: issue -> session -> PR -> merged
+
+State machine, all visible as labels on the issue:
+      (new) -> devin (spawned) -> devin-pr (PR open) ->
+      devin-needs-review | devin-auto-ok -> closed via merge
+      Failure branches: devin-hold (untrusted/triage), devin-error
+      (session error/suspended-terminal), devin-abandoned (issue closed
+      mid-flight, see section 8).
+
+- [ ] Tracker advances labels each poll cycle from GitHub + Devin API facts
+      (session status, pull_requests field, PR state).
+- [ ] Exactly one devin-* lifecycle label per issue at any time.
+- [ ] Verify: walk one issue through the full happy path and confirm label
+      transitions at each step.
+
+## 8. Reversibility: undo on issue close
+
+- [ ] Tracker polls tracked issues for closes (not just opens).
+- [ ] Issue closed while session live -> terminate session
+      (DELETE /organizations/$ORG/sessions/<id>), close its PR if open,
+      delete the devin/* branch, label devin-abandoned.
+- [ ] Issue closed with PR open but unmerged -> close PR + delete branch.
+- [ ] PR already merged: do NOT auto-revert. Comment on the issue with the
+      revert command (`git revert -m 1 <merge sha>`) and label for human.
+- [ ] Verify: close a live issue mid-session -> session terminated, PR
+      closed, branch gone.
+
+## 9. Visualization (after 7, reads its state)
+
+- [ ] status.py: issue-centric table joining GitHub labels/PRs with Devin
+      sessions — issue, lifecycle label, session status/ACUs, PR, CI state.
+- [ ] Keep sessions.py as the Devin-centric view; share fetch code.
+- [ ] Quality view (coverage delta, tests fixed/broken per PR) — needs CI
+      on the fork first. OPEN: set up GitHub Actions on tetratorus/superset,
+      or skip until then.
+
+## Later (do not start)
+
+- Reviewer bot: consumes the section-6 write-ups and checks them against
+  company/engineering principles that aren't visible in the diff; posts a
+  second-opinion review on the PR.
+- Triage classification beyond trust (AUTO vs HOLD for routine vs large/
+  sensitive changes) — mechanism undecided (LLM vs labels vs hybrid).
+- Queueing / concurrency limits; per-session max_acu_limit and org budget
+  alerts; tracker liveness heartbeat; colliding-PR detection; handling
+  issue edits and reopens.

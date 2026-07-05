@@ -233,13 +233,13 @@ verdict {decision, rule_fired, reason, confidence} is read).
 - [x] `review` verdict forces `devin-needs-review` on the eventual PR
       regardless of the author-agent's own needs_human_review flag
       (devin-review-required flag label, read by get_review_label).
-- [ ] Verify: import a SIP/proposal issue -> held with reason, no fix
+- [x] Verify: import a SIP/proposal issue -> held with reason, no fix
       session, no ACUs; import a routine bug -> triaged auto, spawns.
 
-> Partially verified 2026-07-05: apache/superset#41498 (SIP-218) imported as
-> issue #32 -> triage hold (rule 1, high confidence), devin-hold + reason
-> comment, no fix session. The routine-bug -> auto leg is pending the next
-> real import.
+> Fully verified 2026-07-05 (clean-slate demo run): #33 and #34 (real
+> upstream bugs) -> triage auto (high) -> fix sessions spawned; #35
+> (SIP-218 proposal) -> triage hold (rule 1, high) -> devin-hold + reason
+> comment, no fix session. Dashboard funnel: opened 3, spawned 2, hold 1.
 
 ## Later (do not start)
 

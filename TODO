@@ -154,15 +154,6 @@ State machine, all visible as labels on the issue:
 - [ ] Verify: close a live issue mid-session -> session terminated, PR
       closed, branch gone.
 
-## 9. Visualization (after 7, reads its state)
-
-- [ ] status.py: issue-centric table joining GitHub labels/PRs with Devin
-      sessions — issue, lifecycle label, session status/ACUs, PR, CI state.
-- [ ] Keep sessions.py as the Devin-centric view; share fetch code.
-- [ ] Quality view (coverage delta, tests fixed/broken per PR) — needs CI
-      on the fork first. OPEN: set up GitHub Actions on tetratorus/superset,
-      or skip until then.
-
 ## Later (do not start)
 
 - Reviewer bot: consumes the section-6 write-ups and checks them against

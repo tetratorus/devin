@@ -20,6 +20,8 @@ import sys
 import time
 import urllib.request
 
+import sync_playbook
+
 try:
     import certifi
     SSL_CONTEXT = ssl.create_default_context(cafile=certifi.where())
@@ -37,6 +39,30 @@ DEVIN_API_KEY = os.environ.get("DEVIN_SERVICE_USER_KEY", "")
 DEVIN_ORG_ID = os.environ.get("DEVIN_ORG_ID", "")
 
 TRUSTED_ASSOCIATIONS = {"OWNER", "MEMBER", "COLLABORATOR"}
+
+_PLAYBOOK_ID = None
+_KNOWLEDGE_IDS = None
+
+STRUCTURED_OUTPUT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "pr_url": {"type": "string"},
+        "needs_human_review": {"type": "boolean"},
+        "review_points": {"type": "array", "items": {"type": "string"}},
+        "risks": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": ["pr_url", "needs_human_review"],
+}
+
+
+def load_playbook() -> tuple[str, list[str]]:
+    """Sync the playbook and knowledge notes once, caching their IDs."""
+    global _PLAYBOOK_ID, _KNOWLEDGE_IDS
+    if _PLAYBOOK_ID is None:
+        result = sync_playbook.sync()
+        _PLAYBOOK_ID = result.get("playbook_id")
+        _KNOWLEDGE_IDS = result.get("knowledge_ids", [])
+    return _PLAYBOOK_ID, _KNOWLEDGE_IDS
 
 
 def gh_api(endpoint: str, method: str = "GET", fields: dict | None = None):
@@ -330,6 +356,8 @@ def spawn_devin_session(issue: dict, source_body: str) -> str | None:
         f"against {OWNER}/{REPO} that references issue #{number}."
     )
 
+    playbook_id, knowledge_ids = load_playbook()
+
     session = devin_request(
         "POST",
         f"/organizations/{DEVIN_ORG_ID}/sessions",
@@ -337,6 +365,10 @@ def spawn_devin_session(issue: dict, source_body: str) -> str | None:
             "prompt": prompt,
             "title": f"{OWNER}/{REPO} issue #{number}: {title}",
             "tags": [f"issue:{number}"],
+            "playbook_id": playbook_id,
+            "knowledge_ids": knowledge_ids,
+            "structured_output_required": True,
+            "structured_output_schema": STRUCTURED_OUTPUT_SCHEMA,
         },
     )
     if session is None:
@@ -410,6 +442,8 @@ def main() -> None:
     if not ensure_label("devin-hold"):
         print("Failed to ensure the 'devin-hold' label exists in the repo.", file=sys.stderr)
         sys.exit(1)
+
+    load_playbook()
 
     print(f"Tracking {OWNER}/{REPO}, polling every {POLL_INTERVAL}s.")
     while True:

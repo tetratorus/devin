@@ -92,8 +92,10 @@ the tracker (same host, same credentials) may be down too.
 
 **b. Drift between the two sources of truth (the interesting one).**
 Labels (GitHub) and sessions (Devin) are written by the same tracker but
-can disagree: label `devin` with no tagged session (spawn failed after
-lock), live session on a closed issue (undo hasn't run), `devin-pr`
+can disagree: label `devin` with no tagged session (label/session write
+raced or session vanished; a spawn failure now leaves `devin-triage`,
+which is expected to lack a session and is not drift), live session on a
+closed issue (undo hasn't run), `devin-pr`
 label but PR closed by a human, session `waiting_for_user` with no
 question comment on the issue. These mismatches are exactly the bugs the
 tracker is supposed to prevent — the dashboard's job is to surface them,

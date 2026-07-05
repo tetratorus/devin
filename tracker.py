@@ -284,16 +284,9 @@ def send_session_message(session_id: str, message: str) -> bool:
     ) is not None
 
 
-def relay_comments(issue: dict, tracker_user: str) -> None:
+def relay_comments(issue: dict, session: dict, tracker_user: str) -> None:
     """Relay new trusted comments on a tracked issue to its live Devin session."""
     number = issue["number"]
-    session = get_live_session_for_issue(number)
-    if session is None:
-        sessions = get_sessions_for_issue(number)
-        status = sessions[0].get("status", "none") if sessions else "none"
-        print(f"[COMMENTS] Issue #{number}: no live session (status: {status}).")
-        return
-
     session_id = session.get("session_id")
     if not session_id:
         return
@@ -329,6 +322,50 @@ def relay_comments(issue: dict, tracker_user: str) -> None:
         print(f"[COMMENTS] Issue #{number}: no new trusted comments to relay.")
     else:
         print(f"[COMMENTS] Issue #{number}: relayed {relayed} comment(s).")
+
+
+WAITING_DETAILS = {"waiting_for_user", "waiting_for_approval"}
+
+
+def check_blocked_states(issue: dict, session: dict, tracker_user: str) -> None:
+    """Nudge Devin to post on the issue when waiting, and surface suspensions."""
+    number = issue["number"]
+    session_id = session.get("session_id")
+    if not session_id:
+        return
+
+    status = session.get("status", "").lower()
+    status_detail = session.get("status_detail", "").lower()
+    updated_at = session.get("updated_at", 0)
+
+    if status_detail in WAITING_DETAILS:
+        # Only nudge if the session has been waiting long enough to avoid spam.
+        if time.time() - updated_at < 60:
+            return
+
+        comments = fetch_comments(number)
+        bot_comments = [c for c in comments if is_bot_comment(c)]
+        latest_bot = max(bot_comments, key=lambda c: c.get("created_at", 0)) if bot_comments else None
+        if latest_bot and latest_bot.get("created_at", 0) > updated_at:
+            return
+
+        if send_session_message(session_id, "Please post your question or status update to the GitHub issue thread."):
+            print(f"  -> Nudged session {session_id[:10]} to post on issue #{number}.")
+        else:
+            print(f"  -> Failed to nudge session {session_id[:10]} on issue #{number}.", file=sys.stderr)
+
+    elif status == "suspended":
+        reason = session.get("status_detail", "unknown")
+        notice = f"session suspended: {reason}"
+        comments = fetch_comments(number)
+        tracker_comments = [c for c in comments if (c.get("user") or {}).get("login") == tracker_user]
+        if any(c.get("body") == notice for c in tracker_comments):
+            return
+
+        if post_comment(number, notice):
+            print(f"  -> Posted suspension notice for issue #{number}.")
+        else:
+            print(f"  -> Failed to post suspension notice for issue #{number}.", file=sys.stderr)
 
 
 def fetch_issues() -> list[dict] | None:
@@ -388,7 +425,14 @@ def poll_once() -> None:
         number = issue["number"]
 
         if issue_has_label(issue, "devin"):
-            relay_comments(issue, tracker_user)
+            session = get_live_session_for_issue(number)
+            if session is None:
+                sessions = get_sessions_for_issue(number)
+                status = sessions[0].get("status", "none") if sessions else "none"
+                print(f"[TRACKED] Issue #{number}: no live session (status: {status}).")
+            else:
+                relay_comments(issue, session, tracker_user)
+                check_blocked_states(issue, session, tracker_user)
             continue
 
         if issue_has_label(issue, "devin-hold"):

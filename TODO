@@ -108,16 +108,17 @@ Decisions already made — do not relitigate:
       (POST/PUT /organizations/$ORG/playbooks, /knowledge/notes) so re-runs
       are idempotent. Run it on container start, before the tracker loop.
 - [x] Tracker passes the synced playbook_id when creating sessions.
-- [ ] Dockerfile updated: COPY playbook + knowledge, entrypoint runs sync
+- [x] Dockerfile updated: COPY playbook + knowledge, entrypoint runs sync
       then tracker.
 - [ ] Verify: edit playbook.md, restart container, confirm the org playbook
       updated and a new session received it.
 
 > Implemented 2026-07-05: `playbook.md`, `knowledge/*.md`, and `sync_playbook.py`
 > are in place; the tracker calls `load_playbook()` at startup and wires the
-> playbook and `structured_output_schema` into new sessions. The Dockerfile
-> update and Docker-based verification are deferred until the user is ready to
-> move back to Docker.
+> playbook and `structured_output_schema` into new sessions. The Dockerfile was
+> updated to copy the playbook and run `sync_playbook.py` before the tracker.
+> Docker build verification is pending Docker Desktop being fully up (the daemon
+> socket is not present yet).
 
 ## 6. Structured PR write-up (replaces raw-diff review)
 

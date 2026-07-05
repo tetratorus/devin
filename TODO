@@ -24,29 +24,37 @@ Decisions already made — do not relitigate:
 
 ## 1. Per-issue state on GitHub (replaces watermark)
 
-- [ ] When spawning a session: add label `devin` to the issue and post a
+- [x] When spawning a session: add label `devin` to the issue and post a
       comment "Devin session started: <session URL>".
-- [ ] Before spawning: skip any issue that already has the `devin` label.
-- [ ] Delete the watermark state file logic entirely. Tracker must be
+- [x] Before spawning: skip any issue that already has the `devin` label.
+- [x] Delete the watermark state file logic entirely. Tracker must be
       stateless across restarts and safe to run in parallel by accident.
-- [ ] Second line of defense: create sessions with tag `issue:<n>`; before
+- [x] Second line of defense: create sessions with tag `issue:<n>`; before
       spawning, query sessions by that tag and skip if one exists.
-- [ ] Verify: restart tracker mid-run, run two trackers at once — no
+- [x] Verify: restart tracker mid-run, run two trackers at once — no
       duplicate sessions for the same issue.
+
+> Verified 2026-07-05: tracker adds labels/comments, two concurrent tracker
+> instances skipped the same issue because the first took the `devin` label and
+> created a tagged session; the second saw the tag.
 
 ## 2. Trust gate (programmatic)
 
-- [ ] Trusted = issue/comment author_association in OWNER, MEMBER,
+- [x] Trusted = issue/comment author_association in OWNER, MEMBER,
       COLLABORATOR (available on issue and comment objects; no extra call).
-- [ ] Untrusted new issue: do NOT spawn. Label `devin-hold` and move on.
+- [x] Untrusted new issue: do NOT spawn. Label `devin-hold` and move on.
       Its title/body must never appear in any Devin prompt.
 - [ ] Untrusted comment on a tracked issue: never relayed to the session.
+      (Code path enforced; the actual relay logic is in section 3.)
 - [ ] A trusted user can override by removing `devin-hold` — tracker then
       treats the issue as new (but still uses the ORIGINAL untrusted text
       only if a trusted user has explicitly commented approval; otherwise
       the trusted user's restatement comment is the prompt source).
 - [ ] Verify: file an issue from a non-collaborator account -> held, no
       session, no prompt leakage.
+
+> Implemented 2026-07-05: `get_issue_prompt_source()` enforces the trust gate
+> and uses approval/restatement comments; the untrusted live test is pending.
 
 ## 3. Comment relay: issue -> running session
 

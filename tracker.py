@@ -18,7 +18,6 @@ import ssl
 import subprocess
 import sys
 import time
-import urllib.parse
 import urllib.request
 
 try:
@@ -177,13 +176,17 @@ def devin_request(method: str, path: str, data: dict | None = None) -> dict | No
 
 
 def find_session_by_issue_tag(number: int) -> bool:
-    """Return True if any Devin session is tagged for this issue."""
-    query = {"limit": 1, "tags": [f"issue:{number}"]}
-    qs = urllib.parse.quote(json.dumps(query))
-    data = devin_request("GET", f"/organizations/{DEVIN_ORG_ID}/sessions?qs={qs}")
+    """Return True if any Devin session is tagged for this issue.
+
+    Filters client-side: the organization list endpoint accepts the `tags`
+    query param, but the server-side filter does not reliably narrow by tag,
+    so we fetch the page and inspect the tags on each session.
+    """
+    tag = f"issue:{number}"
+    data = devin_request("GET", f"/organizations/{DEVIN_ORG_ID}/sessions?limit=100")
     if data is None:
         return False
-    return len(data.get("items", [])) > 0
+    return any(tag in session.get("tags", []) for session in data.get("items", []))
 
 
 def fetch_issues() -> list[dict] | None:

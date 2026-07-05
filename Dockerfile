@@ -1,13 +1,14 @@
 FROM python:3.12-alpine
 
-# Install GitHub CLI so the tracker can call `gh api` without running locally.
-# python:3.12-alpine already enables the community repo, which contains github-cli.
-RUN apk add --no-cache github-cli
+# Install GitHub CLI and CA certificates so the tracker can call `gh api`
+# and the Devin API without running locally.
+RUN apk add --no-cache github-cli py3-certifi
 
 WORKDIR /app
 
-COPY tracker.py sessions.py ./
+COPY playbook.md sync_playbook.py sessions.py tracker.py ./
+COPY knowledge ./knowledge/
 
 ENV PYTHONUNBUFFERED=1
 
-CMD ["python3", "tracker.py"]
+CMD ["sh", "-c", "python3 sync_playbook.py && python3 tracker.py"]

@@ -138,6 +138,13 @@ svg .dlabel { fill: var(--ink-2); font-variant-numeric: tabular-nums; }
 th.sortable { cursor: pointer; user-select: none; }
 th.sortable:hover { color: var(--ink); }
 th.sortable .dir { color: var(--primary-ink); }
+.pager { display: flex; gap: 10px; align-items: center; justify-content: flex-end;
+         padding: 8px 8px 2px; font-size: 12px; color: var(--muted); }
+.pager button { font: inherit; color: var(--primary-ink); background: none;
+                border: 1px solid var(--border); border-radius: 4px;
+                padding: 2px 10px; cursor: pointer; }
+.pager button:hover:not(:disabled) { border-color: var(--primary); }
+.pager button:disabled { color: var(--muted); cursor: default; opacity: 0.5; }
 .empty { color: var(--muted); font-size: 13px; }
 details { padding: 10px 16px; }
 details summary { cursor: pointer; font-size: 13px; color: var(--ink-2); font-weight: 500; }
@@ -236,6 +243,25 @@ const th = (table, key, label, cls = "") => {
   const [k, dir] = SORT[table];
   return `<th class="sortable ${cls}" data-table="${table}" data-key="${key}">${label}${k === key ? ` <span class="dir">${dir > 0 ? "▲" : "▼"}</span>` : ""}</th>`;
 };
+
+// pagination — client-side, resets to page 0 on filter/sort changes
+const PAGE = { issues: 0, work: 0 };
+const PAGE_SIZE = 15;
+const isTestSession = w => /\[TEST\]|DRY RUN/i.test(w.title || "");
+function paginate(table, rows) {
+  const pages = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
+  PAGE[table] = Math.min(PAGE[table], pages - 1);
+  const start = PAGE[table] * PAGE_SIZE;
+  return { slice: rows.slice(start, start + PAGE_SIZE), start, pages, total: rows.length };
+}
+function pager(table, p) {
+  if (p.total <= PAGE_SIZE) return "";
+  return `<div class="pager">
+    <button data-pager="${table}" data-go="-1" ${PAGE[table] === 0 ? "disabled" : ""}>‹ Prev</button>
+    <span>${p.start + 1}–${Math.min(p.start + PAGE_SIZE, p.total)} of ${p.total}</span>
+    <button data-pager="${table}" data-go="1" ${PAGE[table] >= p.pages - 1 ? "disabled" : ""}>Next ›</button>
+  </div>`;
+}
 const fmt = n => n == null ? "—" : Number(n).toLocaleString("en-US", {maximumFractionDigits: 2});
 const hoursAgo = iso => iso ? (Date.now() - new Date(iso).getTime()) / 36e5 : null;
 const age = iso => {
@@ -315,9 +341,10 @@ function facts(pairs) {
 
 function issueTable(rows) {
   if (!rows.length) return `<div class="empty">Nothing matches the current filter.</div>`;
+  const p = paginate("issues", rows);
   return `<table><thead><tr>${th("issues", "number", "Issue", "num")}${th("issues", "title", "Title")}${th("issues", "lifecycle", "Lifecycle")}
     ${th("issues", "session", "Session")}${th("issues", "acus", "ACUs", "num")}${th("issues", "age", "Age", "num")}${th("issues", "pr", "PR")}</tr></thead><tbody>
-    ${rows.map(r => `<tr>
+    ${p.slice.map(r => `<tr>
       <td class="num"><a href="${esc(r.url)}" target="_blank">#${r.number}</a></td>
       <td class="title-cell" title="${esc(r.title)}">${esc(r.title)}</td>
       <td>${lifecycleChip(r.lifecycle) || '<span class="empty">—</span>'}</td>
@@ -325,15 +352,20 @@ function issueTable(rows) {
       <td class="num">${r.session ? fmt(r.session.acus) : "—"}</td>
       <td class="num">${age(r.created_at)}</td>
       <td>${r.pr ? `<a href="${esc(r.pr.url)}" target="_blank">#${r.pr.number}</a> <span class="empty">${esc(r.pr.state)}</span>` : "—"}</td>
-    </tr>`).join("")}</tbody></table>`;
+    </tr>`).join("")}</tbody></table>${pager("issues", p)}`;
 }
 
 // Per-session work table. Effort proxies: Devin messages sent, lifespan,
 // status transitions observed, and the diff the session shipped.
-function workTable(work) {
-  let active = work.filter(w => w.messages_devin || w.additions || w.deletions || w.commits).filter(matchWork);
+function workTable(work, knownIssues) {
+  let active = work.filter(w => w.messages_devin || w.additions || w.deletions || w.commits)
+    .filter(w => !isTestSession(w))
+    .filter(w => w.issue != null && knownIssues.has(w.issue))   // only sessions of live issues; rest → unlinked panel
+    .filter(matchWork);
   if (!active.length) return `<div class="pad empty">No session activity matches.</div>`;
   active = sortRows(active, WORK_KEYS, SORT.work);
+  const p = paginate("work", active);
+  active = p.slice;
   return `<table><thead><tr>${th("work", "session", "Session")}${th("work", "issue", "Issue")}${th("work", "status", "Status")}
     ${th("work", "lifespan", "Lifespan", "num")}${th("work", "msgs", "Msgs (Devin/user)", "num")}
     ${th("work", "transitions", "Transitions", "num")}${th("work", "commits", "Commits", "num")}${th("work", "diff", "Diff", "num")}${th("work", "acus", "ACUs", "num")}</tr></thead><tbody>
@@ -347,7 +379,7 @@ function workTable(work) {
       <td class="num">${fmt(w.commits)}</td>
       <td class="num">+${fmt(w.additions)} −${fmt(w.deletions)}</td>
       <td class="num">${fmt(w.acus)}</td>
-    </tr>`).join("")}</tbody></table>`;
+    </tr>`).join("")}</tbody></table>${pager("work", p)}`;
 }
 
 // Daily single-series bar chart, inline SVG. One series → one hue, no legend;
@@ -395,6 +427,7 @@ function render(st) {
   LAST = st;
   const m = st.meta, c = st.cost, p = st.proxies;
   const filteredIssues = sortRows(st.issues.filter(matchIssue), ISSUE_KEYS, SORT.issues);
+  const unlinked = st.unlinked_sessions.filter(s => !isTestSession(s));
   document.getElementById("fcount").textContent =
     filterActive() ? `${filteredIssues.length} of ${st.issues.length} issues` : "";
   $repo.textContent = "· " + m.repo;
@@ -474,7 +507,7 @@ function render(st) {
   </div>
 
   <h2>Work per session <span class="note">effort signals — ACUs read 0 on this org, so activity stands in</span></h2>
-  <div class="card">${workTable(st.session_work)}</div>
+  <div class="card">${workTable(st.session_work, new Set(st.issues.map(i => i.number)))}</div>
 
   <h2>Trends</h2>
   <div class="charts">
@@ -486,10 +519,10 @@ function render(st) {
   <div class="footnotes">
     <div class="card"><details${filterActive() ? " open" : ""}><summary>All issues (${filterActive() ? filteredIssues.length + " of " + st.issues.length : st.issues.length})</summary>
       <div class="inner">${issueTable(filteredIssues)}</div></details></div>
-    ${st.unlinked_sessions.length ? `<div class="card"><details>
-      <summary>Unlinked sessions (${st.unlinked_sessions.length}) — no issue link (pre-tagging or non-pipeline)</summary>
+    ${unlinked.length ? `<div class="card"><details>
+      <summary>Unlinked sessions (${unlinked.length}) — no issue link (pre-tagging or non-pipeline)</summary>
       <div class="inner"><table><thead><tr><th>Session</th><th>Status</th><th class="num">ACUs</th><th>Title</th></tr></thead><tbody>
-      ${st.unlinked_sessions.map(s => `<tr><td><a href="${esc(s.url)}" target="_blank">${esc(s.id.slice(0, 12))}</a></td>
+      ${unlinked.map(s => `<tr><td><a href="${esc(s.url)}" target="_blank">${esc(s.id.slice(0, 12))}</a></td>
         <td>${esc(s.status)}</td><td class="num">${fmt(s.acus)}</td><td class="title-cell">${esc(s.title)}</td></tr>`).join("")}
       </tbody></table></div></details></div>` : ""}
     <div class="card"><details><summary>Consistency checks (${st.drift.length ? st.drift.length + " mismatch(es)" : "all clean"})</summary>
@@ -504,20 +537,29 @@ const $fq = document.getElementById("fq"), $flc = document.getElementById("flc")
       $fstate = document.getElementById("fstate");
 $fq.value = F.q; $flc.value = F.lc; $fstate.value = F.state;
 let qTimer;
+const applyFilters = () => { PAGE.issues = 0; PAGE.work = 0; syncHash(); if (LAST) render(LAST); };
 $fq.addEventListener("input", () => {
   clearTimeout(qTimer);
-  qTimer = setTimeout(() => { F.q = $fq.value.trim(); syncHash(); if (LAST) render(LAST); }, 150);
+  qTimer = setTimeout(() => { F.q = $fq.value.trim(); applyFilters(); }, 150);
 });
-$flc.addEventListener("change", () => { F.lc = $flc.value; syncHash(); if (LAST) render(LAST); });
-$fstate.addEventListener("change", () => { F.state = $fstate.value; syncHash(); if (LAST) render(LAST); });
+$flc.addEventListener("change", () => { F.lc = $flc.value; applyFilters(); });
+$fstate.addEventListener("change", () => { F.state = $fstate.value; applyFilters(); });
 
-// sortable column headers (delegated — table HTML is rebuilt on each render)
+// sortable column headers + pager buttons (delegated — HTML is rebuilt on render)
 $app.addEventListener("click", e => {
+  if (!LAST) return;
   const t = e.target.closest("th.sortable");
-  if (!t || !LAST) return;
-  const table = t.dataset.table, key = t.dataset.key;
-  SORT[table] = SORT[table][0] === key ? [key, -SORT[table][1]] : [key, 1];
-  render(LAST);
+  if (t) {
+    const table = t.dataset.table, key = t.dataset.key;
+    SORT[table] = SORT[table][0] === key ? [key, -SORT[table][1]] : [key, 1];
+    PAGE[table] = 0;
+    return render(LAST);
+  }
+  const b = e.target.closest("[data-pager]");
+  if (b && !b.disabled) {
+    PAGE[b.dataset.pager] += Number(b.dataset.go);
+    render(LAST);
+  }
 });
 
 document.addEventListener("mousemove", e => {

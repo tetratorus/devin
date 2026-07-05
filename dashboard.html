@@ -434,8 +434,6 @@ function render(st) {
     ${tile("Merged", fmt(p.merged), p.survival_pct != null ? p.survival_pct + "% of spawned" : "")}
     ${tile("Held by triage", fmt(st.funnel.hold), "no session spawned")}
     ${spendTile}
-    ${tile("Cost per merge", c.usd_per_merge != null ? "$" + fmt(c.usd_per_merge)
-        : c.acus_per_merge != null ? fmt(c.acus_per_merge) + " ACU" : "—", p.merged ? "" : "no merges yet")}
   </div>
 
   <h2>Pipeline <span class="note">${fmt(inTransit)} in transit</span></h2>
@@ -474,7 +472,7 @@ function render(st) {
     </div>
   </div>
 
-  <h2>Work per session <span class="note">effort signals — ACUs read 0 on this org, so activity stands in</span></h2>
+  <h2>Work per session</h2>
   <div class="card">${workTable(st.session_work, new Set(st.issues.map(i => i.number)))}</div>
 
   <h2>Trends</h2>

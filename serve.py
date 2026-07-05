@@ -202,7 +202,7 @@ def build_state() -> dict:
     drift = []
     for r in rows:
         n = r["number"]
-        if r["lifecycle"] and r["lifecycle"] not in ("devin-hold",) and not r["session"]:
+        if r["lifecycle"] and r["lifecycle"] not in ("devin-hold", "devin-triage") and not r["session"]:
             drift.append({"issue": n, "kind": "label-no-session",
                           "detail": f"label {r['lifecycle']} but no Devin session found"})
         if r["session"] and not r["lifecycle"] and r["state"] == "open":

@@ -184,9 +184,10 @@ are an open channel to an agent with push access, so the gate sits in the
 tracker, where a prompt injection can't argue with it.
 
 **Two-layer dedup: label is the lock, session tag is the backstop.** The
-`devin` label is written before spawning; every session carries tag
-`issue:<n>`, checked before and after taking the label. A duplicate session
-requires losing both races within the same few-second window.
+`devin-triage` label is written before triage begins (swapping to `devin`
+when a fix session spawns); every fix session carries tag `issue:<n>`,
+checked before and after taking the lock. A duplicate session requires
+losing both races within the same few-second window.
 
 **The issue thread is the UI.** Questions from Devin, answers from humans,
 session links, suspension notices, revert instructions — all live on the

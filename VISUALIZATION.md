@@ -14,7 +14,7 @@ three places, and one class of data exists nowhere at all (see §3).
 
 | State | Lives in | Fetched via | Notes |
 |---|---|---|---|
-| Issue lifecycle position | GitHub labels (`devin`, `devin-hold`, `devin-pr`, `devin-needs-review`, `devin-auto-ok`, `devin-error`, `devin-abandoned`) | `gh api /repos/O/R/issues` | The canonical "where is this issue" answer. Humans can edit labels — that's a feature, not corruption. |
+| Issue lifecycle position | GitHub labels (`devin-triage`, `devin`, `devin-hold`, `devin-pr`, `devin-needs-review`, `devin-auto-ok`, `devin-error`, `devin-abandoned`; flag labels `devin-ci-failed`, `devin-review-required` ride alongside) | `gh api /repos/O/R/issues` | The canonical "where is this issue" answer. Humans can edit labels — that's a feature, not corruption. Triage sessions are tagged `triage:<n>`, never `issue:<n>`, so they don't join to issues. |
 | Lifecycle *history* (when each label was added/removed) | GitHub issue timeline events | `gh api /repos/O/R/issues/<n>/timeline` | `labeled`/`unlabeled` events carry timestamps + actor. This is how trends get reconstructed without a database. |
 | Issue ↔ session link | Tracker comment ("Devin session started: <url>") + session tag `issue:<n>` | comments API / Devin sessions list | Join key in both directions. |
 | Relay progress | 👀 reactions on comments | reactions API | Only matters for "is the relay healthy", not for metrics. |

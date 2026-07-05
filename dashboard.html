@@ -248,7 +248,7 @@ const th = (table, key, label, cls = "") => {
 // pagination — client-side, resets to page 0 on filter/sort changes
 const PAGE = { issues: 0, work: 0 };
 const PAGE_SIZE = 15;
-const isTestSession = w => /\[TEST\]|DRY RUN/i.test(w.title || "");
+const isTestSession = w => /\[TEST\]|DRY RUN|^TRIAGE /i.test(w.title || "");
 function paginate(table, rows) {
   const pages = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
   PAGE[table] = Math.min(PAGE[table], pages - 1);

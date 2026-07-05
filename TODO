@@ -37,6 +37,8 @@ Decisions already made — do not relitigate:
 > Verified 2026-07-05: tracker adds labels/comments, two concurrent tracker
 > instances skipped the same issue because the first took the `devin` label and
 > created a tagged session; the second saw the tag.
+> Superseded by section 10: the intake lock label is now `devin-triage`
+> (swapped to `devin` when a fix session spawns). Dedup semantics unchanged.
 
 ## 2. Trust gate (programmatic)
 
@@ -224,14 +226,20 @@ verdict {decision, rule_fired, reason, confidence} is read).
 - [x] Verdict recorded as an issue comment (auditable), hold path labels
       devin-hold and spawns nothing, triage failure releases the lock and
       retries next poll.
-- [ ] Lock label during classification is `devin-triage` (visible in the
+- [x] Lock label during classification is `devin-triage` (visible in the
       dashboard as its own state); swaps to `devin` or `devin-hold` on the
       verdict. Stale `devin-triage` with no session = crashed mid-triage;
       tracker clears it and re-triages next cycle.
-- [ ] `review` verdict forces `devin-needs-review` on the eventual PR
-      regardless of the author-agent's own needs_human_review flag.
+- [x] `review` verdict forces `devin-needs-review` on the eventual PR
+      regardless of the author-agent's own needs_human_review flag
+      (devin-review-required flag label, read by get_review_label).
 - [ ] Verify: import a SIP/proposal issue -> held with reason, no fix
       session, no ACUs; import a routine bug -> triaged auto, spawns.
+
+> Partially verified 2026-07-05: apache/superset#41498 (SIP-218) imported as
+> issue #32 -> triage hold (rule 1, high confidence), devin-hold + reason
+> comment, no fix session. The routine-bug -> auto leg is pending the next
+> real import.
 
 ## Later (do not start)
 

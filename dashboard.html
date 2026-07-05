@@ -125,6 +125,19 @@ svg .dlabel { fill: var(--ink-2); font-variant-numeric: tabular-nums; }
            border: 1px solid var(--border); border-radius: 4px; padding: 5px 9px; font-size: 12px;
            box-shadow: 0 2px 8px rgba(0,0,0,0.15); display: none; z-index: 10; }
 .refreshing { opacity: 0.55; transition: opacity .2s; }
+
+/* filter toolbar */
+.toolbar { max-width: 1180px; margin: 14px auto 0; padding: 0 24px;
+           display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.toolbar input, .toolbar select {
+  font: inherit; color: var(--ink); background: var(--surface);
+  border: 1px solid var(--border); border-radius: 4px; padding: 5px 9px; }
+.toolbar input { flex: 1; min-width: 180px; }
+.toolbar input:focus, .toolbar select:focus { outline: none; border-color: var(--primary); }
+.toolbar .fcount { color: var(--muted); font-size: 12px; white-space: nowrap; }
+th.sortable { cursor: pointer; user-select: none; }
+th.sortable:hover { color: var(--ink); }
+th.sortable .dir { color: var(--primary-ink); }
 .empty { color: var(--muted); font-size: 13px; }
 details { padding: 10px 16px; }
 details summary { cursor: pointer; font-size: 13px; color: var(--ink-2); font-weight: 500; }
@@ -136,6 +149,25 @@ details .inner { padding-top: 10px; }
 <div class="masthead"><div class="logo">D</div>
   <h1>Devin pipeline <span class="repo" id="repo"></span></h1>
   <span class="stamp" id="stamp">loading…</span></div>
+<div class="toolbar">
+  <input id="fq" type="search" placeholder="Filter by title or #number…">
+  <select id="flc">
+    <option value="">all lifecycle states</option>
+    <option value="devin">working</option>
+    <option value="devin-pr">PR open</option>
+    <option value="devin-auto-ok">auto-ok</option>
+    <option value="devin-needs-review">needs review</option>
+    <option value="devin-hold">on hold</option>
+    <option value="devin-error">error</option>
+    <option value="devin-abandoned">abandoned</option>
+  </select>
+  <select id="fstate">
+    <option value="">open + closed</option>
+    <option value="open">open only</option>
+    <option value="closed">closed only</option>
+  </select>
+  <span class="fcount" id="fcount"></span>
+</div>
 <div class="wrap" id="app"><p class="empty">Loading…</p></div>
 <div class="tooltip" id="tip"></div>
 <script>
@@ -146,6 +178,64 @@ const $stamp = document.getElementById("stamp");
 const $repo = document.getElementById("repo");
 
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+
+// --- filter + sort state (filters persist in the URL hash) ---
+const F = { q: "", lc: "", state: "" };
+const SORT = { issues: ["number", -1], work: ["acus", -1] };
+let LAST = null;
+(function initFilters() {
+  const h = new URLSearchParams(location.hash.slice(1));
+  F.q = h.get("q") || ""; F.lc = h.get("lc") || ""; F.state = h.get("state") || "";
+})();
+function syncHash() {
+  const h = new URLSearchParams();
+  if (F.q) h.set("q", F.q);
+  if (F.lc) h.set("lc", F.lc);
+  if (F.state) h.set("state", F.state);
+  history.replaceState(null, "", h.toString() ? "#" + h.toString() : location.pathname);
+}
+const filterActive = () => F.q || F.lc || F.state;
+function matchIssue(r) {
+  if (F.lc && r.lifecycle !== F.lc) return false;
+  if (F.state && r.state !== F.state) return false;
+  if (F.q) {
+    const q = F.q.toLowerCase();
+    const hay = ("#" + r.number + " " + (r.title || "")).toLowerCase();
+    if (!hay.includes(q)) return false;
+  }
+  return true;
+}
+function matchWork(w) {
+  if (F.q) {
+    const q = F.q.toLowerCase();
+    return (("#" + (w.issue || "") + " " + (w.title || "") + " " + w.id).toLowerCase()).includes(q);
+  }
+  return true;
+}
+const ISSUE_KEYS = {
+  number: r => r.number, title: r => (r.title || "").toLowerCase(),
+  lifecycle: r => r.lifecycle || "", session: r => r.session?.status || "",
+  acus: r => r.session?.acus ?? -1, age: r => r.created_at || "",
+  pr: r => r.pr?.number ?? -1,
+};
+const WORK_KEYS = {
+  session: w => (w.title || w.id).toLowerCase(), issue: w => w.issue ?? -1,
+  status: w => w.status || "", lifespan: w => w.duration_h ?? -1,
+  msgs: w => w.messages_devin ?? -1, transitions: w => w.status_changes ?? -1,
+  commits: w => w.commits ?? -1, diff: w => (w.additions ?? 0) + (w.deletions ?? 0),
+  acus: w => w.acus ?? -1,
+};
+function sortRows(rows, keys, [key, dir]) {
+  const get = keys[key] || (() => 0);
+  return rows.slice().sort((a, b) => {
+    const va = get(a), vb = get(b);
+    return (va < vb ? -1 : va > vb ? 1 : 0) * dir;
+  });
+}
+const th = (table, key, label, cls = "") => {
+  const [k, dir] = SORT[table];
+  return `<th class="sortable ${cls}" data-table="${table}" data-key="${key}">${label}${k === key ? ` <span class="dir">${dir > 0 ? "▲" : "▼"}</span>` : ""}</th>`;
+};
 const fmt = n => n == null ? "—" : Number(n).toLocaleString("en-US", {maximumFractionDigits: 2});
 const hoursAgo = iso => iso ? (Date.now() - new Date(iso).getTime()) / 36e5 : null;
 const age = iso => {
@@ -224,9 +314,9 @@ function facts(pairs) {
 }
 
 function issueTable(rows) {
-  if (!rows.length) return `<div class="empty">Nothing here.</div>`;
-  return `<table><thead><tr><th class="num">Issue</th><th>Title</th><th>Lifecycle</th>
-    <th>Session</th><th class="num">ACUs</th><th class="num">Age</th><th>PR</th></tr></thead><tbody>
+  if (!rows.length) return `<div class="empty">Nothing matches the current filter.</div>`;
+  return `<table><thead><tr>${th("issues", "number", "Issue", "num")}${th("issues", "title", "Title")}${th("issues", "lifecycle", "Lifecycle")}
+    ${th("issues", "session", "Session")}${th("issues", "acus", "ACUs", "num")}${th("issues", "age", "Age", "num")}${th("issues", "pr", "PR")}</tr></thead><tbody>
     ${rows.map(r => `<tr>
       <td class="num"><a href="${esc(r.url)}" target="_blank">#${r.number}</a></td>
       <td class="title-cell" title="${esc(r.title)}">${esc(r.title)}</td>
@@ -241,11 +331,12 @@ function issueTable(rows) {
 // Per-session work table. Effort proxies: Devin messages sent, lifespan,
 // status transitions observed, and the diff the session shipped.
 function workTable(work) {
-  const active = work.filter(w => w.messages_devin || w.additions || w.deletions || w.commits);
-  if (!active.length) return `<div class="pad empty">No session activity captured yet.</div>`;
-  return `<table><thead><tr><th>Session</th><th>Issue</th><th>Status</th>
-    <th class="num">Lifespan</th><th class="num">Msgs (Devin/user)</th>
-    <th class="num">Transitions</th><th class="num">Commits</th><th class="num">Diff</th><th class="num">ACUs</th></tr></thead><tbody>
+  let active = work.filter(w => w.messages_devin || w.additions || w.deletions || w.commits).filter(matchWork);
+  if (!active.length) return `<div class="pad empty">No session activity matches.</div>`;
+  active = sortRows(active, WORK_KEYS, SORT.work);
+  return `<table><thead><tr>${th("work", "session", "Session")}${th("work", "issue", "Issue")}${th("work", "status", "Status")}
+    ${th("work", "lifespan", "Lifespan", "num")}${th("work", "msgs", "Msgs (Devin/user)", "num")}
+    ${th("work", "transitions", "Transitions", "num")}${th("work", "commits", "Commits", "num")}${th("work", "diff", "Diff", "num")}${th("work", "acus", "ACUs", "num")}</tr></thead><tbody>
     ${active.map(w => `<tr>
       <td><a href="${esc(w.url)}" target="_blank" class="title-cell" style="max-width:220px;display:inline-block" title="${esc(w.title)}">${esc(w.title) || esc(w.id.slice(0, 12))}</a></td>
       <td class="num">${w.issue ? "#" + w.issue : "—"}</td>
@@ -301,7 +392,11 @@ function dayRange(trendMaps, minDays = 7) {
 }
 
 function render(st) {
+  LAST = st;
   const m = st.meta, c = st.cost, p = st.proxies;
+  const filteredIssues = sortRows(st.issues.filter(matchIssue), ISSUE_KEYS, SORT.issues);
+  document.getElementById("fcount").textContent =
+    filterActive() ? `${filteredIssues.length} of ${st.issues.length} issues` : "";
   $repo.textContent = "· " + m.repo;
   const pollNote = m.last_poll ? `data ${age(m.last_poll.finished_at)} old${m.last_poll.ok ? "" : " · last poll FAILED"}` : "no collector data yet";
   $stamp.textContent = pollNote + (m.stale ? " · STALE — collector may be down" : "");
@@ -389,8 +484,8 @@ function render(st) {
   </div>
 
   <div class="footnotes">
-    <div class="card"><details><summary>All issues (${st.issues.length})</summary>
-      <div class="inner">${issueTable(st.issues.slice().sort((a, b) => b.number - a.number))}</div></details></div>
+    <div class="card"><details${filterActive() ? " open" : ""}><summary>All issues (${filterActive() ? filteredIssues.length + " of " + st.issues.length : st.issues.length})</summary>
+      <div class="inner">${issueTable(filteredIssues)}</div></details></div>
     ${st.unlinked_sessions.length ? `<div class="card"><details>
       <summary>Unlinked sessions (${st.unlinked_sessions.length}) — no issue link (pre-tagging or non-pipeline)</summary>
       <div class="inner"><table><thead><tr><th>Session</th><th>Status</th><th class="num">ACUs</th><th>Title</th></tr></thead><tbody>
@@ -403,6 +498,27 @@ function render(st) {
         : `<span class="all-clear">✓ Labels, sessions, and PRs all agree.</span>`}</div></details></div>
   </div>`;
 }
+
+// toolbar wiring — inputs live outside #app so refresh doesn't eat keystrokes
+const $fq = document.getElementById("fq"), $flc = document.getElementById("flc"),
+      $fstate = document.getElementById("fstate");
+$fq.value = F.q; $flc.value = F.lc; $fstate.value = F.state;
+let qTimer;
+$fq.addEventListener("input", () => {
+  clearTimeout(qTimer);
+  qTimer = setTimeout(() => { F.q = $fq.value.trim(); syncHash(); if (LAST) render(LAST); }, 150);
+});
+$flc.addEventListener("change", () => { F.lc = $flc.value; syncHash(); if (LAST) render(LAST); });
+$fstate.addEventListener("change", () => { F.state = $fstate.value; syncHash(); if (LAST) render(LAST); });
+
+// sortable column headers (delegated — table HTML is rebuilt on each render)
+$app.addEventListener("click", e => {
+  const t = e.target.closest("th.sortable");
+  if (!t || !LAST) return;
+  const table = t.dataset.table, key = t.dataset.key;
+  SORT[table] = SORT[table][0] === key ? [key, -SORT[table][1]] : [key, 1];
+  render(LAST);
+});
 
 document.addEventListener("mousemove", e => {
   const t = e.target.closest?.("[data-tip]");

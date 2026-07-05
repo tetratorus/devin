@@ -228,7 +228,7 @@ def find_session_by_issue_tag(number: int) -> bool:
 
 
 LIVE_STATUSES = {"running", "suspended", "waiting_for_user", "waiting_for_approval"}
-TERMINAL_STATUSES = {"error", "exited", "terminated", "failed"}
+TERMINAL_STATUSES = {"error", "exited", "exit", "terminated", "failed"}
 SUSPENDED_TERMINAL_DETAILS = {"out_of_credits", "usage_limit_exceeded"}
 LIFECYCLE_LABELS = {
     "devin",
@@ -281,8 +281,8 @@ def is_relayed_comment(comment_id: int, tracker_user: str) -> bool:
 
 def is_terminal_session(session: dict) -> bool:
     """Return True if the session is in a terminal state."""
-    status = session.get("status", "").lower()
-    detail = session.get("status_detail", "").lower()
+    status = (session.get("status") or "").lower()
+    detail = (session.get("status_detail") or "").lower()
     if status in TERMINAL_STATUSES:
         return True
     if status == "suspended" and detail in SUSPENDED_TERMINAL_DETAILS:

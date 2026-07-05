@@ -605,6 +605,17 @@ def relay_comments(issue: dict, session: dict, tracker_user: str) -> None:
 WAITING_DETAILS = {"waiting_for_user", "waiting_for_approval"}
 
 
+NUDGE_TEXT = "Please post your question or status update to the GitHub issue thread."
+
+
+def has_prior_nudge(session_id: str) -> bool:
+    """True if we already nudged this session (checked via its message log)."""
+    data = devin_request("GET", f"/organizations/{DEVIN_ORG_ID}/sessions/{session_id}/messages")
+    if data is None:
+        return True  # can't check -> fail safe, don't spam
+    return NUDGE_TEXT in json.dumps(data)
+
+
 def check_blocked_states(issue: dict, session: dict, tracker_user: str) -> None:
     """Nudge Devin to post on the issue when waiting, and surface suspensions."""
     number = issue["number"]
@@ -617,6 +628,11 @@ def check_blocked_states(issue: dict, session: dict, tracker_user: str) -> None:
     updated_at = session.get("updated_at", 0)
 
     if status_detail in WAITING_DETAILS:
+        # A session that already produced a PR is done working; waiting_for_user
+        # is its normal resting state, not a blocked question. Never nudge it.
+        if issue_has_label(issue, "devin-pr") or session.get("pull_requests"):
+            return
+
         # Only nudge if the session has been waiting long enough to avoid spam.
         if time.time() - updated_at < 60:
             return
@@ -627,7 +643,12 @@ def check_blocked_states(issue: dict, session: dict, tracker_user: str) -> None:
         if latest_bot and github_timestamp(latest_bot.get("created_at", "")) > updated_at:
             return
 
-        if send_session_message(session_id, "Please post your question or status update to the GitHub issue thread."):
+        # Nudge at most once per session, ever. Every message we send bumps the
+        # session's updated_at, so time-window checks alone re-arm forever.
+        if has_prior_nudge(session_id):
+            return
+
+        if send_session_message(session_id, NUDGE_TEXT):
             print(f"  -> Nudged session {session_id[:10]} to post on issue #{number}.")
         else:
             print(f"  -> Failed to nudge session {session_id[:10]} on issue #{number}.", file=sys.stderr)

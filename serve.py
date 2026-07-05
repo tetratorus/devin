@@ -89,6 +89,14 @@ def build_state() -> dict:
     session_msgs = latest["session_messages"]
 
     # --- joins ---------------------------------------------------------
+    # Triage sessions (tag triage:<n> / "TRIAGE ..." title) are pipeline
+    # plumbing, not fix sessions: never join them to issues or show them.
+    def _is_triage_session(s):
+        tags = s.get("tags") or []
+        return (any(t == "triage" or t.startswith("triage:") for t in tags)
+                or (s.get("title") or "").startswith("TRIAGE"))
+    sessions = {sid: s for sid, s in sessions.items() if not _is_triage_session(s)}
+
     # session -> issue: tag issue:<n>, else "Devin session started" comment.
     session_issue = {}
     for sid, s in sessions.items():
@@ -142,6 +150,15 @@ def build_state() -> dict:
         and (p.get("head") or {}).get("ref", "").startswith("devin/")
     }
 
+    # --- triage verdicts (parsed from the tracker's issue comments) ------
+    triage_re = re.compile(r"\*\*Triage: (auto|review|hold)\*\*.*?confidence (high|medium|low)", re.S)
+    triage_by_issue = {}
+    for e in events:
+        if e.get("event") == "commented":
+            m = triage_re.search(e.get("body") or "")
+            if m:
+                triage_by_issue[e["issue_number"]] = {"decision": m.group(1), "confidence": m.group(2)}
+
     # --- per-issue rows --------------------------------------------------
     def lifecycle_of(issue):
         names = [l.get("name") for l in issue.get("labels", [])]
@@ -165,6 +182,7 @@ def build_state() -> dict:
             "closed_at": issue.get("closed_at"),
             "lifecycle": lifecycle,
             "devin_labels": devin_labels,
+            "triage": triage_by_issue.get(n),
             "session": None if not sess else {
                 "id": sess.get("session_id"),
                 "url": sess.get("url"),

@@ -206,6 +206,8 @@ def collect_once(db: sqlite3.Connection) -> str:
             sid = session.get("session_id")
             if not sid:
                 continue
+            if session.get("is_archived"):
+                continue  # archived org-side = retired from the pipeline; keep the DB free of ghosts
             changed = record(db, "devin", "session", sid, session)
             if changed:
                 counts["session"] += 1

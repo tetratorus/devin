@@ -64,18 +64,8 @@ h2 .note { font-weight: 400; color: var(--muted); font-size: 12.5px; margin-left
 .tile .value { font-size: 28px; font-weight: 600; line-height: 1.2; margin-top: 2px; }
 .tile .sub { font-size: 11.5px; color: var(--muted); }
 
-/* attention strip */
-.attn { display: grid; grid-template-columns: 3fr 2fr; gap: 10px; }
-@media (max-width: 900px) { .attn { grid-template-columns: 1fr; } }
-.attn-head { padding: 9px 16px; border-bottom: 1px solid var(--border);
-             font-weight: 600; font-size: 13px; display: flex; align-items: center; gap: 8px; }
 .count-badge { background: var(--primary-soft); color: var(--primary-ink);
                border-radius: 10px; padding: 0 8px; font-size: 12px; font-weight: 600; }
-.attn-row { display: flex; gap: 10px; align-items: baseline; padding: 8px 16px;
-            border-bottom: 1px solid var(--grid); }
-.attn-row:last-child { border-bottom: none; }
-.attn-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
-.attn-meta { color: var(--muted); font-size: 12px; white-space: nowrap; }
 .all-clear { padding: 14px 16px; color: var(--success-ink); font-size: 13px; }
 
 /* chips — Superset/antd tag style: soft tint + readable ink */
@@ -88,7 +78,7 @@ h2 .note { font-weight: 400; color: var(--muted); font-size: 12.5px; margin-left
 .chip.brand   { background: var(--primary-soft); color: var(--primary-ink); }
 
 /* pipeline board */
-.board { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; align-items: start; }
+.board { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; align-items: start; }
 @media (max-width: 900px) { .board { grid-template-columns: repeat(2, 1fr); } }
 .col-head { padding: 9px 12px; border-bottom: 2px solid var(--primary);
             font-weight: 600; font-size: 13px; display: flex; justify-content: space-between; align-items: center; }
@@ -222,6 +212,7 @@ function matchWork(w) {
 }
 const ISSUE_KEYS = {
   number: r => r.number, title: r => (r.title || "").toLowerCase(),
+  triage: r => r.triage?.decision || "",
   lifecycle: r => r.lifecycle || "", session: r => r.session?.status || "",
   acus: r => r.session?.acus ?? -1, age: r => r.created_at || "",
   pr: r => r.pr?.number ?? -1,
@@ -293,38 +284,14 @@ function tile(label, value, sub) {
     <div class="value">${value}</div><div class="sub">${sub || "&nbsp;"}</div></div>`;
 }
 
-const diffStat = s => !s ? "" :
-  `<span class="attn-meta">+${fmt(s.additions)} −${fmt(s.deletions)} · ${fmt(s.changed_files)} file${s.changed_files === 1 ? "" : "s"}</span>`;
-
-function attnPRs(prs) {
-  const rows = prs.map(p => `<div class="attn-row">
-    <a href="${esc(p.url)}" target="_blank">#${p.number}</a>
-    <span class="attn-title" title="${esc(p.title)}">${esc(p.title)}</span>
-    ${p.draft ? chip("draft", "neutral") : ""}${lifecycleChip(p.lifecycle)}${diffStat(p.stats)}
-    <span class="attn-meta">${p.issue ? `issue <a href="${esc(p.issue_url)}" target="_blank">#${p.issue}</a> · ` : ""}${age(p.created_at)}</span>
-  </div>`).join("");
-  return `<div class="card"><div class="attn-head">Open PRs — review &amp; merge
-    <span class="count-badge">${prs.length}</span></div>
-    ${prs.length ? rows : `<div class="all-clear">✓ No PRs waiting.</div>`}</div>`;
-}
-
-function attnWaiting(items) {
-  const rows = items.map(r => `<div class="attn-row">
-    <a href="${esc(r.url)}" target="_blank">#${r.number}</a>
-    <span class="attn-title" title="${esc(r.title)}">${esc(r.title)}</span>
-    <a href="${esc(r.session.url)}" target="_blank">session</a>
-    <span class="attn-meta">${age(r.session.updated_at)}</span>
-  </div>`).join("");
-  return `<div class="card"><div class="attn-head">Waiting on you
-    <span class="count-badge">${items.length}</span></div>
-    ${items.length ? rows : `<div class="all-clear">✓ Nothing is blocked on input.</div>`}</div>`;
-}
+const TRIAGE_CHIP_KIND = { auto: "ok", review: "warn", hold: "neutral" };
+const triageChip = t => t ? chip(`triage: ${t.decision}`, TRIAGE_CHIP_KIND[t.decision] || "neutral") : "";
 
 function boardCard(r) {
   const s = r.session;
   return `<div class="bcard">
     <div class="t"><a href="${esc(r.url)}" target="_blank">#${r.number}</a> ${esc(r.title)}</div>
-    <div class="m">${lifecycleChip(r.lifecycle)}
+    <div class="m">${lifecycleChip(r.lifecycle)}${triageChip(r.triage)}
       ${s ? `<a href="${esc(s.url)}" target="_blank">${esc(s.status)}${s.status_detail && s.status_detail !== s.status ? " · " + esc(s.status_detail) : ""}</a>` : ""}
       ${s && s.acus ? `<span>${fmt(s.acus)} ACU</span>` : ""}
       ${r.pr ? `<a href="${esc(r.pr.url)}" target="_blank">PR #${r.pr.number}</a>` : ""}
@@ -344,11 +311,12 @@ function facts(pairs) {
 function issueTable(rows) {
   if (!rows.length) return `<div class="empty">Nothing matches the current filter.</div>`;
   const p = paginate("issues", rows);
-  return `<table><thead><tr>${th("issues", "number", "Issue", "num")}${th("issues", "title", "Title")}${th("issues", "lifecycle", "Lifecycle")}
+  return `<table><thead><tr>${th("issues", "number", "Issue", "num")}${th("issues", "title", "Title")}${th("issues", "triage", "Triage")}${th("issues", "lifecycle", "Lifecycle")}
     ${th("issues", "session", "Session")}${th("issues", "acus", "ACUs", "num")}${th("issues", "age", "Age", "num")}${th("issues", "pr", "PR")}</tr></thead><tbody>
     ${p.slice.map(r => `<tr>
       <td class="num"><a href="${esc(r.url)}" target="_blank">#${r.number}</a></td>
       <td class="title-cell" title="${esc(r.title)}">${esc(r.title)}</td>
+      <td>${triageChip(r.triage) || '<span class="empty">—</span>'}</td>
       <td>${lifecycleChip(r.lifecycle) || '<span class="empty">—</span>'}</td>
       <td>${r.session ? `<a href="${esc(r.session.url)}" target="_blank">${esc(r.session.status)}</a>` : "—"}</td>
       <td class="num">${r.session ? fmt(r.session.acus) : "—"}</td>
@@ -443,16 +411,15 @@ function render(st) {
 
   // board buckets (current position, one card per issue; PR column is PR-centric)
   const openPRNums = new Set(st.open_prs.map(pr => pr.number));
-  const raised = open.filter(r => !r.session);
-  const inSession = open.filter(r => r.session && !(r.pr && (openPRNums.has(r.pr.number) || r.pr.state === "merged")));
+  const inTriage = open.filter(r => ["devin-triage", "devin-hold"].includes(r.lifecycle));
+  const raised = open.filter(r => !r.session && !r.lifecycle);
+  const inSession = open.filter(r => !inTriage.includes(r) && r.session && !(r.pr && (openPRNums.has(r.pr.number) || r.pr.state === "merged")));
   const prIssueRows = st.issues.filter(r => r.pr && openPRNums.has(r.pr.number));
   const done = st.issues.filter(r => (r.pr && r.pr.state === "merged")
       || ["devin-abandoned", "devin-error"].includes(r.lifecycle))
     .sort((a, b) => (b.pr?.merged_at || b.closed_at || "").localeCompare(a.pr?.merged_at || a.closed_at || ""))
     .slice(0, 8);
   const inTransit = inSession.length + st.open_prs.length;
-  const waiting = open.filter(r => live(r) && r.session.status_detail === "waiting_for_user")
-    .sort((a, b) => (hoursAgo(b.session.updated_at) ?? 0) - (hoursAgo(a.session.updated_at) ?? 0));
 
   const spendTile = c.total_usd != null
     ? tile("Spend", "$" + fmt(c.total_usd), "@ $" + c.acu_usd + "/ACU")
@@ -465,17 +432,16 @@ function render(st) {
     ${tile("In transit", fmt(inTransit), fmt(inSession.length) + " working · " + fmt(st.open_prs.length) + " in PR")}
     ${tile("Awaiting review", fmt(st.open_prs.length), "open Devin PRs")}
     ${tile("Merged", fmt(p.merged), p.survival_pct != null ? p.survival_pct + "% of spawned" : "")}
+    ${tile("Held by triage", fmt(st.funnel.hold), "no session spawned")}
     ${spendTile}
     ${tile("Cost per merge", c.usd_per_merge != null ? "$" + fmt(c.usd_per_merge)
         : c.acus_per_merge != null ? fmt(c.acus_per_merge) + " ACU" : "—", p.merged ? "" : "no merges yet")}
   </div>
 
-  <h2>Needs a human</h2>
-  <div class="attn">${attnPRs(st.open_prs)}${attnWaiting(waiting)}</div>
-
   <h2>Pipeline <span class="note">${fmt(inTransit)} in transit</span></h2>
   <div class="board">
     ${column("Raised", raised, "No untracked issues.")}
+    ${column("Triage", inTriage, "Nothing classifying or held.")}
     ${column("In session", inSession, "No active sessions.")}
     ${column("PR open", prIssueRows.length ? prIssueRows : [], st.open_prs.length ? st.open_prs.length + " PR(s) without a linked issue — see Open PRs above." : "No open PRs.")}
     ${column("Done", done, "Nothing finished yet.")}

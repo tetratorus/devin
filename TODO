@@ -155,12 +155,12 @@ State machine, all visible as labels on the issue:
 - [x] Tracker advances labels each poll cycle from GitHub + Devin API facts
       (session status, pull_requests field, PR state).
 - [x] Exactly one devin-* lifecycle label per issue at any time.
-- [ ] Verify: walk one issue through the full happy path and confirm label
+- [x] Verify: walk one issue through the full happy path and confirm label
       transitions at each step.
 
-> Implemented 2026-07-05: `advance_lifecycle_label()` and `set_lifecycle_label()`
-> move issues through the lifecycle based on session status and PR state.
-> Test issues were observed transitioning to `devin-pr`.
+> Verified 2026-07-05: issue #25 went from `(new)` -> `devin` -> `devin-pr`
+> (PR #26 open) -> `devin-needs-review` (after PR merge, based on structured
+> output `needs_human_review: true`).
 
 ## 8. Reversibility: undo on issue close
 
@@ -174,9 +174,11 @@ State machine, all visible as labels on the issue:
 - [x] Verify: close a live issue mid-session -> session terminated, PR
       closed, branch gone.
 
-> Verified 2026-07-05: closed a test issue with a live session and open PR;
-> the tracker terminated the session, closed the PR, deleted the branch, and
-> applied the `devin-abandoned` label.
+> Verified 2026-07-05:
+> - Closed old test issues #1, #3, #4, #9: all were labeled `devin-abandoned`
+>   (sessions terminated, PRs/branches cleaned up).
+> - Issue #25 closed after PR #26 merged: tracker posted the revert command
+>   `git revert -m 1 <sha>` and kept `devin-needs-review`.
 
 ## 9. CI feedback on Devin PRs
 
@@ -203,10 +205,10 @@ reads them. A red PR is currently silent and still mergeable.
 - [ ] Verify: PR with a deliberately failing test -> label + comment appear;
       push the fix -> label clears.
 
-> Implemented 2026-07-05: `handle_ci_feedback()` reads check-runs, posts a
-> SHA-keyed comment on failure, applies `devin-ci-failed`, relays the failure
-> to a live session, and removes the label when checks are green. The baseline
-> master run and the deliberately-failing-PR verification are pending.
+> Verified 2026-07-05: PR #26 had all active checks green (`pre-commit`,
+> `unit-tests-required`, `frontend-build`). The tracker did not apply
+> `devin-ci-failed`. The deliberately-failing-PR scenario and the master
+> baseline are still pending.
 
 ## Later (do not start)
 

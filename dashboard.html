@@ -1,0 +1,432 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Devin pipeline</title>
+<style>
+/* Superset-flavored theme: teal #20A7C9 primary, Inter, flat 4px cards.
+   Colors verified against apache/superset supersetColors + brand teal. */
+:root {
+  --page: #F7F7F7; --surface: #FFFFFF;
+  --ink: #333333; --ink-2: #666666; --muted: #999999;
+  --border: #E0E0E0; --grid: #ECECEC; --baseline: #D0D0D0;
+  --primary: #20A7C9; --primary-ink: #11738C; --primary-soft: rgba(32,167,201,0.12);
+  --chart-series: #1985A0;              /* teal darkened to clear 3:1 on white */
+  --success: #5AC189; --success-ink: #2A7A50; --success-soft: rgba(90,193,137,0.16);
+  --warning: #FCC700; --warning-ink: #8A6D00; --warning-soft: rgba(252,199,0,0.18);
+  --danger:  #E04355; --danger-ink:  #B02937; --danger-soft:  rgba(224,67,85,0.13);
+  --neutral-soft: rgba(102,102,102,0.10);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --page: #111111; --surface: #1B1B1B;
+    --ink: #F0F0F0; --ink-2: #B0B0B0; --muted: #7C7C7C;
+    --border: #2F2F2F; --grid: #262626; --baseline: #3A3A3A;
+    --primary: #20A7C9; --primary-ink: #58C3DE; --primary-soft: rgba(32,167,201,0.18);
+    --chart-series: #20A7C9;
+    --success-ink: #5AC189; --success-soft: rgba(90,193,137,0.14);
+    --warning-ink: #FCC700; --warning-soft: rgba(252,199,0,0.12);
+    --danger-ink:  #E9707E; --danger-soft:  rgba(224,67,85,0.16);
+    --neutral-soft: rgba(176,176,176,0.12);
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--page); color: var(--ink);
+  font: 13.5px/1.5 "Inter", "Helvetica Neue", Helvetica, Arial, sans-serif;
+}
+a { color: var(--primary-ink); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+.masthead {
+  background: var(--surface); border-bottom: 2px solid var(--primary);
+  padding: 10px 24px; display: flex; align-items: center; gap: 10px;
+}
+.logo { width: 22px; height: 22px; border-radius: 4px; background: var(--primary);
+        color: #fff; font-weight: 700; font-size: 13px; display: flex;
+        align-items: center; justify-content: center; }
+.masthead h1 { font-size: 15px; font-weight: 600; margin: 0; }
+.masthead .repo { color: var(--ink-2); font-weight: 400; }
+.stamp { margin-left: auto; color: var(--muted); font-size: 12px; }
+.stamp.stale { color: var(--danger-ink); font-weight: 600; }
+
+.wrap { max-width: 1180px; margin: 0 auto; padding: 18px 24px 60px; }
+h2 { font-size: 14px; font-weight: 600; margin: 26px 0 10px; }
+h2 .note { font-weight: 400; color: var(--muted); font-size: 12.5px; margin-left: 6px; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 4px; }
+.pad { padding: 14px 16px; }
+
+/* KPI row — Superset big-number style: left-aligned, number + subheader */
+.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(155px, 1fr)); gap: 10px; }
+.tile { padding: 12px 16px; }
+.tile .label { font-size: 12px; color: var(--ink-2); }
+.tile .value { font-size: 28px; font-weight: 600; line-height: 1.2; margin-top: 2px; }
+.tile .sub { font-size: 11.5px; color: var(--muted); }
+
+/* attention strip */
+.attn { display: grid; grid-template-columns: 3fr 2fr; gap: 10px; }
+@media (max-width: 900px) { .attn { grid-template-columns: 1fr; } }
+.attn-head { padding: 9px 16px; border-bottom: 1px solid var(--border);
+             font-weight: 600; font-size: 13px; display: flex; align-items: center; gap: 8px; }
+.count-badge { background: var(--primary-soft); color: var(--primary-ink);
+               border-radius: 10px; padding: 0 8px; font-size: 12px; font-weight: 600; }
+.attn-row { display: flex; gap: 10px; align-items: baseline; padding: 8px 16px;
+            border-bottom: 1px solid var(--grid); }
+.attn-row:last-child { border-bottom: none; }
+.attn-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+.attn-meta { color: var(--muted); font-size: 12px; white-space: nowrap; }
+.all-clear { padding: 14px 16px; color: var(--success-ink); font-size: 13px; }
+
+/* chips — Superset/antd tag style: soft tint + readable ink */
+.chip { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; font-weight: 500;
+        border-radius: 3px; padding: 1px 7px; white-space: nowrap; }
+.chip.ok      { background: var(--success-soft); color: var(--success-ink); }
+.chip.warn    { background: var(--warning-soft); color: var(--warning-ink); }
+.chip.danger  { background: var(--danger-soft);  color: var(--danger-ink); }
+.chip.neutral { background: var(--neutral-soft); color: var(--ink-2); }
+.chip.brand   { background: var(--primary-soft); color: var(--primary-ink); }
+
+/* pipeline board */
+.board { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; align-items: start; }
+@media (max-width: 900px) { .board { grid-template-columns: repeat(2, 1fr); } }
+.col-head { padding: 9px 12px; border-bottom: 2px solid var(--primary);
+            font-weight: 600; font-size: 13px; display: flex; justify-content: space-between; align-items: center; }
+.col-body { padding: 8px; display: flex; flex-direction: column; gap: 8px; min-height: 40px; }
+.bcard { border: 1px solid var(--border); border-radius: 4px; padding: 8px 10px; background: var(--page); }
+.bcard .t { font-size: 12.5px; line-height: 1.35; display: -webkit-box;
+            -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.bcard .m { margin-top: 5px; display: flex; gap: 6px; align-items: center; flex-wrap: wrap;
+            font-size: 11.5px; color: var(--muted); }
+.col-empty { color: var(--muted); font-size: 12px; padding: 8px 10px; }
+
+/* facts + tables */
+.cols { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+@media (max-width: 800px) { .cols { grid-template-columns: 1fr; } }
+.fact { display: flex; justify-content: space-between; padding: 4px 0; font-size: 13px; }
+.fact b { font-variant-numeric: tabular-nums; font-weight: 600; }
+.fact .k { color: var(--ink-2); }
+.panel-title { font-size: 12.5px; font-weight: 600; color: var(--ink-2); margin-bottom: 8px; }
+
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th { text-align: left; color: var(--muted); font-weight: 500; font-size: 12px;
+     border-bottom: 1px solid var(--border); padding: 5px 8px; }
+td { padding: 6px 8px; border-bottom: 1px solid var(--grid); vertical-align: top; }
+tr:last-child td { border-bottom: none; }
+td.num { font-variant-numeric: tabular-nums; text-align: right; }
+th.num { text-align: right; }
+.title-cell { max-width: 380px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 10px; }
+.chart-title { font-size: 12.5px; font-weight: 600; color: var(--ink-2); margin-bottom: 6px; }
+svg text { font: 10.5px "Inter", "Helvetica Neue", Arial, sans-serif; fill: var(--muted); }
+svg .dlabel { fill: var(--ink-2); font-variant-numeric: tabular-nums; }
+.tooltip { position: fixed; pointer-events: none; background: var(--surface); color: var(--ink);
+           border: 1px solid var(--border); border-radius: 4px; padding: 5px 9px; font-size: 12px;
+           box-shadow: 0 2px 8px rgba(0,0,0,0.15); display: none; z-index: 10; }
+.refreshing { opacity: 0.55; transition: opacity .2s; }
+.empty { color: var(--muted); font-size: 13px; }
+details { padding: 10px 16px; }
+details summary { cursor: pointer; font-size: 13px; color: var(--ink-2); font-weight: 500; }
+details .inner { padding-top: 10px; }
+.footnotes { margin-top: 26px; display: flex; flex-direction: column; gap: 8px; }
+</style>
+</head>
+<body>
+<div class="masthead"><div class="logo">D</div>
+  <h1>Devin pipeline <span class="repo" id="repo"></span></h1>
+  <span class="stamp" id="stamp">loading…</span></div>
+<div class="wrap" id="app"><p class="empty">Loading…</p></div>
+<div class="tooltip" id="tip"></div>
+<script>
+"use strict";
+const $app = document.getElementById("app");
+const $tip = document.getElementById("tip");
+const $stamp = document.getElementById("stamp");
+const $repo = document.getElementById("repo");
+
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const fmt = n => n == null ? "—" : Number(n).toLocaleString("en-US", {maximumFractionDigits: 2});
+const hoursAgo = iso => iso ? (Date.now() - new Date(iso).getTime()) / 36e5 : null;
+const age = iso => {
+  const h = hoursAgo(iso);
+  if (h == null) return "—";
+  if (h < 1) return Math.round(h * 60) + "m";
+  if (h < 48) return Math.round(h) + "h";
+  return Math.round(h / 24) + "d";
+};
+
+// chips always pair a glyph/text with the tint — color never carries alone
+const chip = (text, kind, icon) =>
+  `<span class="chip ${kind}">${icon ? icon + " " : ""}${esc(text)}</span>`;
+const LIFECYCLE_CHIP = {
+  "devin":              ["working", "brand", ""],
+  "devin-pr":           ["PR open", "brand", ""],
+  "devin-auto-ok":      ["auto-ok", "ok", "✓"],
+  "devin-needs-review": ["needs review", "warn", "▲"],
+  "devin-hold":         ["on hold", "warn", "▲"],
+  "devin-error":        ["error", "danger", "✕"],
+  "devin-abandoned":    ["abandoned", "neutral", ""],
+};
+const lifecycleChip = l => l && LIFECYCLE_CHIP[l] ? chip(...LIFECYCLE_CHIP[l]) : "";
+
+function tile(label, value, sub) {
+  return `<div class="card tile"><div class="label">${esc(label)}</div>
+    <div class="value">${value}</div><div class="sub">${sub || "&nbsp;"}</div></div>`;
+}
+
+const diffStat = s => !s ? "" :
+  `<span class="attn-meta">+${fmt(s.additions)} −${fmt(s.deletions)} · ${fmt(s.changed_files)} file${s.changed_files === 1 ? "" : "s"}</span>`;
+
+function attnPRs(prs) {
+  const rows = prs.map(p => `<div class="attn-row">
+    <a href="${esc(p.url)}" target="_blank">#${p.number}</a>
+    <span class="attn-title" title="${esc(p.title)}">${esc(p.title)}</span>
+    ${p.draft ? chip("draft", "neutral") : ""}${lifecycleChip(p.lifecycle)}${diffStat(p.stats)}
+    <span class="attn-meta">${p.issue ? `issue <a href="${esc(p.issue_url)}" target="_blank">#${p.issue}</a> · ` : ""}${age(p.created_at)}</span>
+  </div>`).join("");
+  return `<div class="card"><div class="attn-head">Open PRs — review &amp; merge
+    <span class="count-badge">${prs.length}</span></div>
+    ${prs.length ? rows : `<div class="all-clear">✓ No PRs waiting.</div>`}</div>`;
+}
+
+function attnWaiting(items) {
+  const rows = items.map(r => `<div class="attn-row">
+    <a href="${esc(r.url)}" target="_blank">#${r.number}</a>
+    <span class="attn-title" title="${esc(r.title)}">${esc(r.title)}</span>
+    <a href="${esc(r.session.url)}" target="_blank">session</a>
+    <span class="attn-meta">${age(r.session.updated_at)}</span>
+  </div>`).join("");
+  return `<div class="card"><div class="attn-head">Waiting on you
+    <span class="count-badge">${items.length}</span></div>
+    ${items.length ? rows : `<div class="all-clear">✓ Nothing is blocked on input.</div>`}</div>`;
+}
+
+function boardCard(r) {
+  const s = r.session;
+  return `<div class="bcard">
+    <div class="t"><a href="${esc(r.url)}" target="_blank">#${r.number}</a> ${esc(r.title)}</div>
+    <div class="m">${lifecycleChip(r.lifecycle)}
+      ${s ? `<a href="${esc(s.url)}" target="_blank">${esc(s.status)}${s.status_detail && s.status_detail !== s.status ? " · " + esc(s.status_detail) : ""}</a>` : ""}
+      ${s && s.acus ? `<span>${fmt(s.acus)} ACU</span>` : ""}
+      ${r.pr ? `<a href="${esc(r.pr.url)}" target="_blank">PR #${r.pr.number}</a>` : ""}
+      <span>${age(r.created_at)}</span></div></div>`;
+}
+
+function column(title, cards, emptyText) {
+  return `<div class="card"><div class="col-head">${esc(title)}
+    <span class="count-badge">${cards.length}</span></div>
+    <div class="col-body">${cards.length ? cards.map(boardCard).join("") : `<div class="col-empty">${esc(emptyText)}</div>`}</div></div>`;
+}
+
+function facts(pairs) {
+  return pairs.map(([k, v]) => `<div class="fact"><span class="k">${esc(k)}</span><b>${v}</b></div>`).join("");
+}
+
+function issueTable(rows) {
+  if (!rows.length) return `<div class="empty">Nothing here.</div>`;
+  return `<table><thead><tr><th class="num">Issue</th><th>Title</th><th>Lifecycle</th>
+    <th>Session</th><th class="num">ACUs</th><th class="num">Age</th><th>PR</th></tr></thead><tbody>
+    ${rows.map(r => `<tr>
+      <td class="num"><a href="${esc(r.url)}" target="_blank">#${r.number}</a></td>
+      <td class="title-cell" title="${esc(r.title)}">${esc(r.title)}</td>
+      <td>${lifecycleChip(r.lifecycle) || '<span class="empty">—</span>'}</td>
+      <td>${r.session ? `<a href="${esc(r.session.url)}" target="_blank">${esc(r.session.status)}</a>` : "—"}</td>
+      <td class="num">${r.session ? fmt(r.session.acus) : "—"}</td>
+      <td class="num">${age(r.created_at)}</td>
+      <td>${r.pr ? `<a href="${esc(r.pr.url)}" target="_blank">#${r.pr.number}</a> <span class="empty">${esc(r.pr.state)}</span>` : "—"}</td>
+    </tr>`).join("")}</tbody></table>`;
+}
+
+// Per-session work table. Effort proxies: Devin messages sent, lifespan,
+// status transitions observed, and the diff the session shipped.
+function workTable(work) {
+  const active = work.filter(w => w.messages_devin || w.additions || w.deletions || w.commits);
+  if (!active.length) return `<div class="pad empty">No session activity captured yet.</div>`;
+  return `<table><thead><tr><th>Session</th><th>Issue</th><th>Status</th>
+    <th class="num">Lifespan</th><th class="num">Msgs (Devin/user)</th>
+    <th class="num">Transitions</th><th class="num">Commits</th><th class="num">Diff</th><th class="num">ACUs</th></tr></thead><tbody>
+    ${active.map(w => `<tr>
+      <td><a href="${esc(w.url)}" target="_blank" class="title-cell" style="max-width:220px;display:inline-block" title="${esc(w.title)}">${esc(w.title) || esc(w.id.slice(0, 12))}</a></td>
+      <td class="num">${w.issue ? "#" + w.issue : "—"}</td>
+      <td>${esc(w.status)}${w.status_detail && w.status_detail !== w.status ? ' <span class="empty">· ' + esc(w.status_detail) + "</span>" : ""}</td>
+      <td class="num">${w.duration_h != null ? fmt(w.duration_h) + "h" : "—"}</td>
+      <td class="num">${fmt(w.messages_devin)} / ${fmt(w.messages_user)}</td>
+      <td class="num">${fmt(w.status_changes)}</td>
+      <td class="num">${fmt(w.commits)}</td>
+      <td class="num">+${fmt(w.additions)} −${fmt(w.deletions)}</td>
+      <td class="num">${fmt(w.acus)}</td>
+    </tr>`).join("")}</tbody></table>`;
+}
+
+// Daily single-series bar chart, inline SVG. One series → one hue, no legend;
+// selective direct label on the last bar; every bar has a hover tooltip.
+function barChart(days, series, opts = {}) {
+  const W = 300, H = 118, padL = 4, padR = 4, padB = 18, padT = 14;
+  const vals = days.map(d => series[d] || 0);
+  const max = Math.max(...vals, 1);
+  const iw = (W - padL - padR) / days.length;
+  const bw = Math.min(Math.max(iw - 2, 2), 24);
+  let bars = "", labels = "";
+  days.forEach((d, i) => {
+    const v = vals[i];
+    const h = Math.round((H - padT - padB) * v / max);
+    const x = padL + i * iw + (iw - bw) / 2;
+    const y = H - padB - h;
+    bars += `<g><path d="M${x},${H - padB} v${-Math.max(h - 4, 0)} q0,-4 4,-4 h${bw - 8} q4,0 4,4 v${Math.max(h - 4, 0)} z"
+      fill="${v ? "var(--chart-series)" : "none"}"></path>
+      <rect x="${padL + i * iw}" y="0" width="${iw}" height="${H}" fill="transparent"
+        data-tip="${esc(d)}: ${fmt(v)}${opts.unit ? " " + opts.unit : ""}"></rect></g>`;
+    if (i === days.length - 1 && v) labels += `<text class="dlabel" x="${x + bw / 2}" y="${y - 4}" text-anchor="middle">${fmt(v)}</text>`;
+    if (i === 0 || i === days.length - 1)
+      labels += `<text x="${padL + i * iw + iw / 2}" y="${H - 4}" text-anchor="middle">${d.slice(5)}</text>`;
+  });
+  return `<svg viewBox="0 0 ${W} ${H}" width="100%" role="img">
+    <line x1="0" x2="${W}" y1="${H - padB}" y2="${H - padB}" stroke="var(--baseline)" stroke-width="1"/>
+    ${bars}${labels}</svg>`;
+}
+
+function dayRange(trendMaps, minDays = 7) {
+  const all = trendMaps.flatMap(m => Object.keys(m));
+  const end = new Date();
+  let start = new Date(end.getTime() - (minDays - 1) * 864e5);
+  if (all.length) {
+    const first = new Date(Math.min(...all.map(d => new Date(d + "T00:00:00Z").getTime())));
+    if (first < start) start = first;
+  }
+  const days = [];
+  for (let t = start.getTime(); t <= end.getTime(); t += 864e5)
+    days.push(new Date(t).toISOString().slice(0, 10));
+  return days.slice(-45);
+}
+
+function render(st) {
+  const m = st.meta, c = st.cost, p = st.proxies;
+  $repo.textContent = "· " + m.repo;
+  const pollNote = m.last_poll ? `data ${age(m.last_poll.finished_at)} old${m.last_poll.ok ? "" : " · last poll FAILED"}` : "no collector data yet";
+  $stamp.textContent = pollNote + (m.stale ? " · STALE — collector may be down" : "");
+  $stamp.className = m.stale ? "stamp stale" : "stamp";
+
+  const open = st.issues.filter(r => r.state === "open");
+  const closed = st.issues.filter(r => r.state === "closed");
+  const live = r => r.session && ["running", "suspended"].includes(r.session.status);
+
+  // board buckets (current position, one card per issue; PR column is PR-centric)
+  const openPRNums = new Set(st.open_prs.map(pr => pr.number));
+  const raised = open.filter(r => !r.session);
+  const inSession = open.filter(r => r.session && !(r.pr && (openPRNums.has(r.pr.number) || r.pr.state === "merged")));
+  const prIssueRows = st.issues.filter(r => r.pr && openPRNums.has(r.pr.number));
+  const done = st.issues.filter(r => (r.pr && r.pr.state === "merged")
+      || ["devin-abandoned", "devin-error"].includes(r.lifecycle))
+    .sort((a, b) => (b.pr?.merged_at || b.closed_at || "").localeCompare(a.pr?.merged_at || a.closed_at || ""))
+    .slice(0, 8);
+  const inTransit = inSession.length + st.open_prs.length;
+  const waiting = open.filter(r => live(r) && r.session.status_detail === "waiting_for_user")
+    .sort((a, b) => (hoursAgo(b.session.updated_at) ?? 0) - (hoursAgo(a.session.updated_at) ?? 0));
+
+  const spendTile = c.total_usd != null
+    ? tile("Spend", "$" + fmt(c.total_usd), "@ $" + c.acu_usd + "/ACU")
+    : tile("Spend (ACUs)", fmt(c.total_acus), "set ACU_USD for $");
+  const days = dayRange([st.trends.issues_opened, st.trends.prs_merged, st.trends.acu_burn]);
+
+  $app.innerHTML = `
+  <div class="kpis">
+    ${tile("Issues raised", fmt(st.issues.length), fmt(open.length) + " open")}
+    ${tile("In transit", fmt(inTransit), fmt(inSession.length) + " working · " + fmt(st.open_prs.length) + " in PR")}
+    ${tile("Awaiting review", fmt(st.open_prs.length), "open Devin PRs")}
+    ${tile("Merged", fmt(p.merged), p.survival_pct != null ? p.survival_pct + "% of spawned" : "")}
+    ${spendTile}
+    ${tile("Cost per merge", c.usd_per_merge != null ? "$" + fmt(c.usd_per_merge)
+        : c.acus_per_merge != null ? fmt(c.acus_per_merge) + " ACU" : "—", p.merged ? "" : "no merges yet")}
+  </div>
+
+  <h2>Needs a human</h2>
+  <div class="attn">${attnPRs(st.open_prs)}${attnWaiting(waiting)}</div>
+
+  <h2>Pipeline <span class="note">${fmt(inTransit)} in transit</span></h2>
+  <div class="board">
+    ${column("Raised", raised, "No untracked issues.")}
+    ${column("In session", inSession, "No active sessions.")}
+    ${column("PR open", prIssueRows.length ? prIssueRows : [], st.open_prs.length ? st.open_prs.length + " PR(s) without a linked issue — see Open PRs above." : "No open PRs.")}
+    ${column("Done", done, "Nothing finished yet.")}
+  </div>
+
+  <h2>Cost &amp; value</h2>
+  <div class="cols">
+    <div class="card pad">
+      <div class="panel-title">Cost (exact)</div>
+      ${facts([
+        ["Total ACUs", fmt(c.total_acus)],
+        ["Rate", c.acu_usd ? "$" + c.acu_usd + "/ACU" : "unset (ACU_USD)"],
+        ["Total spend", c.total_usd != null ? "$" + fmt(c.total_usd) : "—"],
+        ["ACUs per merged PR", fmt(c.acus_per_merge)],
+        ["Wasted ACUs (dead-end sessions)", fmt(c.wasted_acus)],
+      ])}
+    </div>
+    <div class="card pad">
+      <div class="panel-title">Value proxies (imply value, don't measure it)</div>
+      ${facts([
+        ["Merged Devin PRs", fmt(p.merged)],
+        ["Survival (merged ÷ spawned)", p.survival_pct != null ? p.survival_pct + "%" : "—"],
+        ["Issues closed / by Devin", fmt(p.closed_issues) + " / " + fmt(p.closed_by_devin)],
+        ["auto-ok vs needs-review", fmt(p.auto_ok) + " / " + fmt(p.needs_review)],
+        ["Median hours to PR", fmt(p.median_hours_to_pr)],
+        ["Median hours to merge", fmt(p.median_hours_to_merge)],
+        ["Reopened after merge", fmt(p.reopened_after_merge)],
+        ["Lines merged (+/−)", "+" + fmt(p.lines_merged_add) + " / −" + fmt(p.lines_merged_del)],
+      ])}
+    </div>
+  </div>
+
+  <h2>Work per session <span class="note">effort signals — ACUs read 0 on this org, so activity stands in</span></h2>
+  <div class="card">${workTable(st.session_work)}</div>
+
+  <h2>Trends</h2>
+  <div class="charts">
+    <div class="card pad"><div class="chart-title">Issues opened / day</div>${barChart(days, st.trends.issues_opened)}</div>
+    <div class="card pad"><div class="chart-title">PRs merged / day</div>${barChart(days, st.trends.prs_merged)}</div>
+    <div class="card pad"><div class="chart-title">ACU burn / day</div>${barChart(days, st.trends.acu_burn, {unit: "ACU"})}</div>
+  </div>
+
+  <div class="footnotes">
+    <div class="card"><details><summary>All issues (${st.issues.length})</summary>
+      <div class="inner">${issueTable(st.issues.slice().sort((a, b) => b.number - a.number))}</div></details></div>
+    ${st.unlinked_sessions.length ? `<div class="card"><details>
+      <summary>Unlinked sessions (${st.unlinked_sessions.length}) — no issue link (pre-tagging or non-pipeline)</summary>
+      <div class="inner"><table><thead><tr><th>Session</th><th>Status</th><th class="num">ACUs</th><th>Title</th></tr></thead><tbody>
+      ${st.unlinked_sessions.map(s => `<tr><td><a href="${esc(s.url)}" target="_blank">${esc(s.id.slice(0, 12))}</a></td>
+        <td>${esc(s.status)}</td><td class="num">${fmt(s.acus)}</td><td class="title-cell">${esc(s.title)}</td></tr>`).join("")}
+      </tbody></table></div></details></div>` : ""}
+    <div class="card"><details><summary>Consistency checks (${st.drift.length ? st.drift.length + " mismatch(es)" : "all clean"})</summary>
+      <div class="inner">${st.drift.length ? st.drift.map(d =>
+        `<div class="fact"><span class="k">#${d.issue} — ${esc(d.kind)}</span><span>${esc(d.detail)}</span></div>`).join("")
+        : `<span class="all-clear">✓ Labels, sessions, and PRs all agree.</span>`}</div></details></div>
+  </div>`;
+}
+
+document.addEventListener("mousemove", e => {
+  const t = e.target.closest?.("[data-tip]");
+  if (t) {
+    $tip.textContent = t.getAttribute("data-tip");
+    $tip.style.display = "block";
+    $tip.style.left = Math.min(e.clientX + 12, innerWidth - 160) + "px";
+    $tip.style.top = (e.clientY + 12) + "px";
+  } else $tip.style.display = "none";
+});
+
+async function refresh() {
+  try {
+    const res = await fetch("/api/state");
+    if (!res.ok) throw new Error(res.status);
+    render(await res.json());
+    $app.classList.remove("refreshing");
+  } catch (err) {
+    if ($app.firstChild) $app.classList.add("refreshing");
+    else $app.innerHTML = `<p class="empty">Cannot reach /api/state (${esc(err.message)}). Is serve.py running?</p>`;
+  }
+}
+refresh();
+setInterval(refresh, 30_000);
+</script>
+</body>
+</html>

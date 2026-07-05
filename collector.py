@@ -217,8 +217,8 @@ def collect_once(db: sqlite3.Connection) -> str:
                                "items": msgs.get("items", [])}):
                         counts["session_messages"] = counts.get("session_messages", 0) + 1
 
-    changed_summary = ", ".join(f"{v} {k}" for k, v in counts.items() if v)
-    notes = f"changed: {changed_summary or 'nothing'}"
+    changed = ", ".join(f"{v} {k}" for k, v in counts.items() if v)
+    notes = f"changed: {changed or 'nothing'}"
     if errors:
         notes += f"; errors: {'; '.join(errors)}"
     return notes if not errors else f"ERR {notes}"

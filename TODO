@@ -154,6 +154,31 @@ State machine, all visible as labels on the issue:
 - [ ] Verify: close a live issue mid-session -> session terminated, PR
       closed, branch gone.
 
+## 9. CI feedback on Devin PRs
+
+Context: the fork has exactly three active workflows (superset-python-unittest,
+superset-frontend, pre-commit); all others are disabled. They run on every PR
+push and report as check runs only — no comments, nothing required, nothing
+reads them. A red PR is currently silent and still mergeable.
+
+- [ ] Baseline first: trigger the three workflows once against plain master
+      (any trivial push). If any is red on master out of the box, fix or
+      disable it before trusting PR signal — permanently-red CI is worse
+      than no CI.
+- [ ] Watch phase: for each issue labeled `devin-pr`, read the PR head's
+      check runs (GET /repos/{o}/{r}/commits/<head_sha>/check-runs).
+- [ ] Any check concluded failure/timed_out -> add label `devin-ci-failed`
+      + comment once on the issue naming the failing checks (idempotent:
+      don't re-comment for the same head SHA).
+- [ ] If the session is still live, also relay the failure into it so Devin
+      can push a fix; a new push resets the cycle.
+- [ ] All checks green -> remove `devin-ci-failed`. This label is a status
+      flag, allowed alongside the lifecycle label — it is exempt from
+      section 7's exactly-one-label rule.
+- [ ] status reporting reads the same check-run state (CI column).
+- [ ] Verify: PR with a deliberately failing test -> label + comment appear;
+      push the fix -> label clears.
+
 ## Later (do not start)
 
 - Reviewer bot: consumes the section-6 write-ups and checks them against
@@ -164,3 +189,8 @@ State machine, all visible as labels on the issue:
 - Queueing / concurrency limits; per-session max_acu_limit and org budget
   alerts; tracker liveness heartbeat; colliding-PR detection; handling
   issue edits and reopens.
+- Auto-merge for devin-auto-ok PRs, gated on the section-9 checks being
+  required via branch protection.
+- Visualization / status dashboards: moved out of this repo's scope to a
+  separate agent to-do. Nothing here should build views; section 9 only
+  exposes CI state as labels.

@@ -58,19 +58,23 @@ Decisions already made — do not relitigate:
 
 ## 3. Comment relay: issue -> running session
 
-- [ ] Each poll cycle, for every open issue with label `devin` and a live
+- [x] Each poll cycle, for every open issue with label `devin` and a live
       session (status running/suspended-resumable): fetch issue comments.
-- [ ] Relay each new trusted comment to the session via
+- [x] Relay each new trusted comment to the session via
       POST /v3/organizations/$ORG/sessions/<id>/messages, prefixed with
       "New comment from <login> on issue #<n>:".
-- [ ] Idempotence without local state: after relaying a comment, add an
+- [x] Idempotence without local state: after relaying a comment, add an
       "eyes" reaction to it as the marker; skip comments that already have
       the tracker's reaction. (Devin's own comments and bot comments are
       never relayed.)
 - [ ] If the session has ended (exit/error), do not relay; post nothing.
       Label `devin-done` or `devin-error` per section 5 lifecycle.
-- [ ] Verify: comment on a live issue -> message shows up in session,
+- [x] Verify: comment on a live issue -> message shows up in session,
       second poll does not re-send it.
+
+> Verified 2026-07-05: commented on a live tracked issue; the tracker relayed
+> it to the session and the next poll skipped it because of the eyes reaction.
+> The terminal-session label transition is deferred to section 5.
 
 ## 4. Devin -> issue: responses and blocked states
 

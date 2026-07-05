@@ -373,6 +373,99 @@ def set_lifecycle_label(issue: dict, new_label: str) -> None:
         print(f"  -> Lifecycle label on issue #{number}: {new_label}")
 
 
+def terminate_session(session_id: str) -> bool:
+    """Terminate a live Devin session."""
+    return devin_request(
+        "DELETE",
+        f"/organizations/{DEVIN_ORG_ID}/sessions/{session_id}",
+    ) is not None
+
+
+def get_pr(pr_url: str) -> dict | None:
+    """Fetch a PR object from its URL."""
+    try:
+        pr_number = int(pr_url.split("/")[-1])
+    except (ValueError, IndexError):
+        return None
+    return gh_api(f"/repos/{OWNER}/{REPO}/pulls/{pr_number}")
+
+
+def close_pr_and_delete_branch(pr_url: str) -> bool:
+    """Close a PR and delete its head branch."""
+    pr_number = int(pr_url.split("/")[-1])
+    pr = get_pr(pr_url)
+    if pr is None:
+        return False
+    branch = pr.get("head", {}).get("ref")
+    closed = gh_api(
+        f"/repos/{OWNER}/{REPO}/pulls/{pr_number}",
+        method="PATCH",
+        fields={"state": "closed"},
+    ) is not None
+    if closed and branch:
+        gh_api(f"/repos/{OWNER}/{REPO}/git/refs/heads/{branch}", method="DELETE")
+    return closed
+
+
+def handle_closed_issues() -> None:
+    """Clean up live sessions and open PRs for issues that were closed mid-flight."""
+    endpoint = f"/repos/{OWNER}/{REPO}/issues?state=closed&sort=updated&direction=desc&per_page={PER_PAGE}"
+    issues = gh_api(endpoint)
+    if issues is None:
+        return
+
+    for issue in issues:
+        if "pull_request" in issue:
+            continue
+        number = issue["number"]
+        labels = {l.get("name") for l in issue.get("labels", [])}
+        lifecycle = labels & LIFECYCLE_LABELS
+        if not lifecycle:
+            continue
+        if "devin-abandoned" in labels or "devin-error" in labels:
+            continue
+
+        session = get_session_for_lifecycle(number)
+        prs = session.get("pull_requests", []) if session else []
+
+        merged_prs = []
+        open_prs = []
+        for pr_info in prs:
+            pr_url = pr_info.get("pr_url", "")
+            state = get_pr_state(pr_url)
+            if state == "merged":
+                merged_prs.append(pr_url)
+            elif state == "open":
+                open_prs.append(pr_url)
+
+        if merged_prs:
+            # A merged PR cannot be safely auto-reverted; surface the revert command for a human.
+            for pr_url in merged_prs:
+                pr = get_pr(pr_url)
+                if pr is None:
+                    continue
+                merge_sha = pr.get("merge_commit_sha")
+                if merge_sha:
+                    comment = (
+                        f"The associated PR was merged before this issue was closed. "
+                        f"If you need to undo it, run: `git revert -m 1 {merge_sha}`"
+                    )
+                    post_comment(number, comment)
+            if not (labels & {"devin-needs-review", "devin-auto-ok"}):
+                set_lifecycle_label(issue, "devin-needs-review")
+            continue
+
+        if session and session.get("status", "").lower() in LIVE_STATUSES:
+            if terminate_session(session.get("session_id")):
+                print(f"  -> Terminated session for closed issue #{number}.")
+
+        for pr_url in open_prs:
+            close_pr_and_delete_branch(pr_url)
+            print(f"  -> Closed PR and deleted branch for closed issue #{number}.")
+
+        set_lifecycle_label(issue, "devin-abandoned")
+
+
 def get_sessions_for_issue(number: int) -> list[dict]:
     """Return all Devin sessions tagged for this issue, newest first."""
     tag = f"issue:{number}"
@@ -532,6 +625,8 @@ def spawn_devin_session(issue: dict, source_body: str) -> str | None:
 
 def poll_once() -> None:
     """Run one poll pass. Hand off any open issue not yet tracked on GitHub."""
+    handle_closed_issues()
+
     issues = fetch_issues()
     if issues is None:
         return  # transient failure; retry next cycle

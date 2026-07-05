@@ -407,6 +407,66 @@ def close_pr_and_delete_branch(pr_url: str) -> bool:
     return closed
 
 
+def has_ci_failure_comment(number: int, sha: str, tracker_user: str) -> bool:
+    """Return True if the tracker already posted a CI-failure comment for this SHA."""
+    marker = f"<!-- devin-ci-failed: {sha} -->"
+    comments = fetch_comments(number)
+    return any(
+        c.get("user", {}).get("login") == tracker_user and marker in (c.get("body") or "")
+        for c in comments
+    )
+
+
+def post_ci_failure_comment(number: int, sha: str, failed_names: list[str]) -> None:
+    """Post a CI failure notice on the issue, idempotent by SHA."""
+    body = (
+        f"CI failed on commit `{sha}` for the failing checks: "
+        f"{', '.join(failed_names)}.\n\n"
+        f"<!-- devin-ci-failed: {sha} -->"
+    )
+    post_comment(number, body)
+
+
+def handle_ci_feedback(issue: dict, session: dict | None, tracker_user: str) -> None:
+    """Check PR check runs and surface failures as a label + optional session message."""
+    number = issue["number"]
+    prs = session.get("pull_requests", []) if session else []
+    open_pr_url = next((pr.get("pr_url") for pr in prs if get_pr_state(pr.get("pr_url", "")) == "open"), None)
+    if open_pr_url is None:
+        return
+
+    pr = get_pr(open_pr_url)
+    if pr is None:
+        return
+    head_sha = pr.get("head", {}).get("sha")
+    if not head_sha:
+        return
+
+    check_data = gh_api(f"/repos/{OWNER}/{REPO}/commits/{head_sha}/check-runs")
+    if check_data is None:
+        return
+
+    runs = [r for r in check_data.get("check_runs", []) if r.get("status") == "completed"]
+    failed = [r for r in runs if r.get("conclusion") in ("failure", "timed_out")]
+
+    if failed:
+        failed_names = [r.get("name", "unknown") for r in failed]
+        if not has_ci_failure_comment(number, head_sha, tracker_user):
+            post_ci_failure_comment(number, head_sha, failed_names)
+            print(f"  -> CI failed on issue #{number}: {', '.join(failed_names)}")
+        if not issue_has_label(issue, "devin-ci-failed"):
+            add_label(number, "devin-ci-failed")
+        if session and session.get("status", "").lower() in LIVE_STATUSES:
+            send_session_message(
+                session.get("session_id"),
+                f"CI failed on commit {head_sha}: {', '.join(failed_names)}. Please push a fix.",
+            )
+    else:
+        if issue_has_label(issue, "devin-ci-failed"):
+            remove_label(number, "devin-ci-failed")
+            print(f"  -> CI green on issue #{number}; removed devin-ci-failed.")
+
+
 def handle_closed_issues() -> None:
     """Clean up live sessions and open PRs for issues that were closed mid-flight."""
     endpoint = f"/repos/{OWNER}/{REPO}/issues?state=closed&sort=updated&direction=desc&per_page={PER_PAGE}"
@@ -645,6 +705,9 @@ def poll_once() -> None:
                 status = session.get("status", "none") if session else "none"
                 print(f"[TRACKED] Issue #{number}: no live session (status: {status}).")
 
+            if issue_has_label(issue, "devin-pr"):
+                handle_ci_feedback(issue, session, tracker_user)
+
             new_label = advance_lifecycle_label(issue, session)
             if new_label:
                 set_lifecycle_label(issue, new_label)
@@ -706,6 +769,10 @@ def main() -> None:
         if not ensure_label(label):
             print(f"Failed to ensure the '{label}' label exists in the repo.", file=sys.stderr)
             sys.exit(1)
+
+    if not ensure_label("devin-ci-failed"):
+        print("Failed to ensure the 'devin-ci-failed' label exists in the repo.", file=sys.stderr)
+        sys.exit(1)
 
     load_playbook()
 
